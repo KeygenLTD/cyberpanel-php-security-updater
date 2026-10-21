@@ -69,7 +69,7 @@ class PolicyTests(unittest.TestCase):
     def test_unsupported_os(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'os-release'
-            for content in ('ID=ubuntu\nVERSION_ID=24.04', 'ID=almalinux\nVERSION_ID=7'):
+            for content in ('ID=ubuntu\nVERSION_ID=20.04', 'ID=almalinux\nVERSION_ID=7'):
                 path.write_text(content)
                 with self.assertRaises(RuntimeError):
                     u.platform_check(path)
@@ -83,6 +83,17 @@ class PolicyTests(unittest.TestCase):
                 for major in ('8', '9', '10'):
                     path.write_text('ID=almalinux\nVERSION_ID="{}.0"'.format(major))
                     self.assertEqual(u.platform_check(path), major)
+                for release in ('22.04', '24.04'):
+                    path.write_text('ID=ubuntu\nVERSION_ID="{}"'.format(release))
+                    self.assertEqual(u.platform_check(path), 'ubuntu:' + release)
+
+    def test_manual_commands_do_not_execute(self):
+        report = {'backend': 'apt', 'installed': ['lsphp82:amd64=8.2.34'], 'warnings': []}
+        with patch.object(u, 'run') as run:
+            u.manual_commands([Package()], report)
+        run.assert_not_called()
+        self.assertIn('--simulate', report['manual_commands'][0])
+        self.assertIn('--no-remove', report['manual_commands'][1])
 
     def test_proc_deleted_and_start_identity(self):
         with tempfile.TemporaryDirectory() as directory:
