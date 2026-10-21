@@ -1,0 +1,10 @@
+#!/bin/bash
+set -euo pipefail
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+for interpreter in /usr/libexec/platform-python /usr/bin/python3; do
+    if [[ -x "$interpreter" ]] && "$interpreter" -c 'import dnf, rpm' 2>/dev/null; then
+        exec "$interpreter" "$SCRIPT_DIR/../updater.py" "$@"
+    fi
+done
+printf '%s\n' 'ERROR: DNF4 Python bindings required; DNF5-only systems are unsupported.' >&2
+exit 2
