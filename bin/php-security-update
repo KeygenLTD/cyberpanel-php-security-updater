@@ -1,0 +1,10 @@
+#!/bin/bash
+set -euo pipefail
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+for interpreter in /usr/libexec/platform-python /usr/bin/python3; do
+    if [[ -x "$interpreter" ]] && { "$interpreter" -c 'import dnf, rpm' 2>/dev/null || "$interpreter" -c 'import apt, apt_pkg' 2>/dev/null; }; then
+        exec "$interpreter" "$SCRIPT_DIR/../updater.py" "$@"
+    fi
+done
+printf '%s\n' 'ERROR: OS Python with DNF4/RPM or python3-apt bindings required.' >&2
+exit 2
