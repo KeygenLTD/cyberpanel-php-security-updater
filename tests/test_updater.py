@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -68,10 +69,20 @@ class PolicyTests(unittest.TestCase):
     def test_unsupported_os(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'os-release'
-            for content in ('ID=ubuntu\nVERSION_ID=24.04', 'ID=almalinux\nVERSION_ID=9'):
+            for content in ('ID=ubuntu\nVERSION_ID=24.04', 'ID=almalinux\nVERSION_ID=7'):
                 path.write_text(content)
                 with self.assertRaises(RuntimeError):
                     u.platform_check(path)
+
+    def test_supported_os_8_9_10(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'os-release'
+            with patch.object(u.os, 'uname', return_value=SimpleNamespace(machine='x86_64'), create=True), \
+                    patch.object(Path, 'is_dir', return_value=True), \
+                    patch.object(u, 'run', return_value='LiteSpeed/1.8.3 Open'):
+                for major in ('8', '9', '10'):
+                    path.write_text('ID=almalinux\nVERSION_ID="{}.0"'.format(major))
+                    self.assertEqual(u.platform_check(path), major)
 
     def test_proc_deleted_and_start_identity(self):
         with tempfile.TemporaryDirectory() as directory:
