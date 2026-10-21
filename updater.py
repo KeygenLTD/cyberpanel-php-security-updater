@@ -318,9 +318,10 @@ def main(argv=None):
     report = dict(schema=1, mode='apply' if args.apply else 'check', status='failed',
                   time=dt.datetime.now(dt.timezone.utc).isoformat())
     lock = None
-    scratch = tempfile.TemporaryDirectory(prefix='lsphp-check-')
-    args.scratch = scratch.name
+    scratch = None
     try:
+        scratch = tempfile.TemporaryDirectory(prefix='lsphp-check-')
+        args.scratch = scratch.name
         if args.apply:
             window(args.window_start, args.window_end)
             backup_check(args.backup, args.backup_sha256)
@@ -334,16 +335,36 @@ def main(argv=None):
     finally:
         if lock:
             lock.close()
-        scratch.cleanup()
+        if scratch is not None:
+            scratch.cleanup()
     encoded = json.dumps(report, indent=2, sort_keys=True)
     text = '\n'.join('{}: {}'.format(k, json.dumps(v, sort_keys=True)) for k, v in sorted(report.items())) + '\n'
     print(encoded)
     if args.report_prefix:
-        for suffix, content in (('.json', encoded + '\n'), ('.txt', text)):
-            # Exclusive create avoids clobbering files/symlinks, including as root.
-            fd = os.open(args.report_prefix + suffix, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            with os.fdopen(fd, 'w') as stream:
-                stream.write(content)
+        created = []
+        try:
+            for suffix, content in (('.json', encoded + '\n'), ('.txt', text)):
+                path = args.report_prefix + suffix
+
+                # Never overwrite existing reports or symlinks.
+                fd = os.open(
+                    path,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o600
+                )
+                created.append(path)
+
+                with os.fdopen(fd, 'w') as stream:
+                    stream.write(content)
+
+        except OSError:
+            # Remove only files created by this invocation.
+            for path in reversed(created):
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+            raise
     return 0 if report['status'] == 'ok' else 2
 
 

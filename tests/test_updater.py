@@ -165,6 +165,39 @@ class PolicyTests(unittest.TestCase):
                 u.terminate_stale(args)
         send.assert_called_once_with(9, u.signal.SIGTERM)
 
+    def test_report_partial_write_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = str(Path(directory) / 'result')
+
+            # Simulate failure when creating the second report file.
+            original_open = u.os.open
+
+            def failing_open(path, flags, mode=0o777):
+                if str(path).endswith('.txt'):
+                    raise OSError('Simulated report write failure')
+                return original_open(path, flags, mode)
+
+            with patch.object(u, 'execute'), \
+                 patch.object(u.os, 'open', side_effect=failing_open), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaises(OSError):
+                    u.main(['--report-prefix', prefix])
+
+            self.assertFalse(Path(prefix + '.json').exists())
+            self.assertFalse(Path(prefix + '.txt').exists())
+
+    def test_temporary_directory_creation_failure(self):
+        with patch.object(
+            u.tempfile,
+            'TemporaryDirectory',
+            side_effect=OSError('Simulated disk full')
+        ), contextlib.redirect_stdout(io.StringIO()) as out:
+            result = u.main([])
+
+        self.assertEqual(result, 2)
+        report = json.loads(out.getvalue())
+        self.assertEqual(report['status'], 'failed')
+        self.assertIn('Simulated disk full', report['error'])
 
 if __name__ == '__main__':
     unittest.main()
