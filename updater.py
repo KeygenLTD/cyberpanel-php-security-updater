@@ -30,8 +30,8 @@ def platform_check(path=Path('/etc/os-release')):
             key, value = line.split('=', 1)
             values[key] = value.strip('"\'')
     major = values.get('VERSION_ID', '').split('.')[0]
-    if values.get('ID') != 'almalinux' or major not in ('8', '10'):
-        raise RuntimeError('Supported OS: AlmaLinux 8 and 10 only')
+    if values.get('ID') != 'almalinux' or major not in ('8', '9', '10'):
+        raise RuntimeError('Supported OS: AlmaLinux 8, 9 and 10 only')
     if os.uname().machine not in ('x86_64', 'aarch64'):
         raise RuntimeError('Unsupported architecture')
     if not Path('/usr/local/CyberCP').is_dir():
