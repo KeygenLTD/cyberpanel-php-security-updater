@@ -488,12 +488,12 @@ def secure_update_flow(args):
             return 0
 
         print('')
-        backup = input('Confirm a current restorable backup/snapshot exists. Type BACKUP READY: ').strip()
-        if backup != 'BACKUP READY':
+        backup = input('Do you have a current restorable backup/snapshot? [y/N]: ').strip().lower()
+        if backup not in ('y', 'yes'):
             print('Update cancelled; no packages were changed.')
             return 2
-        confirm = input('Type UPDATE to install all listed LSPHP upgrades: ').strip()
-        if confirm != 'UPDATE':
+        confirm = input('Install all listed LSPHP upgrades now? [y/N]: ').strip().lower()
+        if confirm not in ('y', 'yes'):
             print('Update cancelled; no packages were changed.')
             return 2
 

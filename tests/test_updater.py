@@ -221,7 +221,7 @@ class PolicyTests(unittest.TestCase):
 
         with patch('security_scan.run_security_scan', return_value=clean_scan), \
              patch.object(u, 'execute', side_effect=fake_execute) as execute, \
-             patch('builtins.input', side_effect=['BACKUP READY', 'UPDATE']), \
+             patch('builtins.input', side_effect=['y', 'y']), \
              patch('fcntl.flock'), patch('builtins.open', mock_open()):
             result = u.secure_update_flow(args)
 
