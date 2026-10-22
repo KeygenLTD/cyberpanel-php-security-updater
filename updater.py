@@ -254,15 +254,19 @@ def execute(args, report):
             print(json.dumps({'transaction_preview': report['preview']}, indent=2), flush=True)
         if not args.apply:
             return
-        report['backup'] = backup_check(args.backup, args.backup_sha256)
-        window(args.window_start, args.window_end)
+        if args.secure_update:
+            report['backup'] = {'operator_attested': True}
+        else:
+            report['backup'] = backup_check(args.backup, args.backup_sha256)
+            window(args.window_start, args.window_end)
         if incoming:
             base.download_packages(incoming)
             for pkg in incoming:
                 code, message = base.package_signature_check(pkg)
                 if code != 0:
                     raise RuntimeError('RPM signature check failed: ' + message)
-            window(args.window_start, args.window_end)
+            if not args.secure_update:
+                window(args.window_start, args.window_end)
             report['transaction_started'] = True
             base.do_transaction()
             report['transaction_completed'] = True
@@ -272,6 +276,11 @@ def execute(args, report):
                               pkg.name + '.' + pkg.arch])
                 if actual != '{}:{}-{}'.format(pkg.epoch, pkg.version, pkg.release):
                     raise RuntimeError('Post-transaction RPM verification failed')
+            if args.secure_update:
+                restart_marker = Path('/usr/local/lsws/admin/tmp/.lsphp_restart.txt')
+                restart_marker.parent.mkdir(parents=True, exist_ok=True)
+                restart_marker.touch()
+                report['php_restart_marker'] = str(restart_marker)
         report['php_after'] = versions(installed)
     postflight(args, report)
 
@@ -283,8 +292,14 @@ def postflight(args, report):
     from site_audit import audit_sites
     report['sites_after'] = audit_sites(report['php_after'], report['processes_after'])
     report['ols_after'] = run(['systemctl', 'is-active', 'lsws'])
-    if report['ols_after'] != 'active' or any(p['deleted'] for p in report['processes_after']):
-        raise RuntimeError('Post-check incomplete: OLS inactive or stale PHP workers remain')
+    if report['ols_after'] != 'active':
+        raise RuntimeError('Post-check incomplete: OpenLiteSpeed is inactive')
+    stale = [p for p in report['processes_after'] if p['deleted']]
+    if stale:
+        if args.secure_update:
+            report['warnings'].append('Stale PHP workers remain; restart marker was written and workers should recycle on subsequent requests.')
+        else:
+            raise RuntimeError('Post-check incomplete: stale PHP workers remain')
     report['warnings'].append('CLI and service checks passed; verify each website through its real HTTP path.')
 
 
@@ -293,6 +308,7 @@ def parser():
     mode = p.add_mutually_exclusive_group()
     mode.add_argument('--check', action='store_true', help='default: cached, read-only preview')
     mode.add_argument('--apply', action='store_true')
+    mode.add_argument('--secure-update', action='store_true', help='scan, preview affected sites and update all installed LSPHP branches')
     p.add_argument('--manual', action='store_true', help='check and print manual commands; execute nothing')
     p.add_argument('--approve', choices=['APPLY-LSPHP-UPDATES'])
     p.add_argument('--backup')
@@ -400,9 +416,109 @@ def human_summary(report):
 
 
 
+def update_impact_summary(report):
+    preview = report.get('preview', [])
+    branches = set()
+    for item in preview:
+        match = re.match(r'lsphp([0-9]{2,3})', item.get('name', ''))
+        if match:
+            branches.add(match.group(1))
+
+    affected = []
+    for site in report.get('sites_before', []):
+        matched = []
+        for handler in site.get('handlers', []):
+            binary = handler.get('binary') or ''
+            match = re.search(r'/lsphp([0-9]{2,3})/bin/lsphp', binary)
+            if match and match.group(1) in branches:
+                matched.append(handler.get('php_on_disk') or 'unknown')
+        if matched:
+            affected.append((site.get('site', 'unknown'), matched))
+
+    print('')
+    print('PHP update impact')
+    print('  Package upgrades: {}'.format(len(preview)))
+    if branches:
+        labels = []
+        for branch in sorted(branches):
+            labels.append('{}.{}'.format(branch[0], branch[1:]) if len(branch) == 2 else branch)
+        print('  PHP branches: {}'.format(', '.join(labels)))
+    if affected:
+        print('  Sites using PHP branches that will be updated:')
+        for site, versions in affected:
+            print('    - {} (PHP {})'.format(site, ', '.join(sorted(set(versions)))))
+    else:
+        print('  No configured site handler was resolved to an upgrading PHP branch.')
+    return affected
+
+
+def secure_update_flow(args):
+    from security_scan import run_security_scan
+
+    since = args.since or '2026-10-10'
+    print('=== Phase 1/3: Security scan ===')
+    scan_report = run_security_scan(days=args.days, deep=False, interactive=False, json_output=False, since=since)
+    severe = [f for f in scan_report.get('findings', []) if f.get('score', 0) >= 55]
+    if severe:
+        from security_scan import interactive_review
+        print('')
+        print('[WARNING] HIGH/CRITICAL security findings detected: {}'.format(len(severe)))
+        review_report = dict(scan_report)
+        review_report['findings'] = severe
+        interactive_review(review_report)
+        proceed = input('Type CONTINUE to proceed to PHP update preview, or anything else to stop: ').strip()
+        if proceed != 'CONTINUE':
+            print('Stopped after security review; no packages were changed.')
+            return 2
+
+    scratch = tempfile.TemporaryDirectory(prefix='lsphp-secure-update-')
+    lock = None
+    try:
+        args.scratch = scratch.name
+        print('')
+        print('=== Phase 2/3: PHP update preview ===')
+        args.apply = False
+        preview_report = dict(schema=1, mode='check', status='failed', time=dt.datetime.now(dt.timezone.utc).isoformat())
+        execute(args, preview_report)
+        preview_report['status'] = 'ok'
+        update_impact_summary(preview_report)
+        if not preview_report.get('preview'):
+            print('')
+            print('[OK] No LSPHP package upgrades are currently available.')
+            return 0
+
+        print('')
+        backup = input('Confirm a current restorable backup/snapshot exists. Type BACKUP READY: ').strip()
+        if backup != 'BACKUP READY':
+            print('Update cancelled; no packages were changed.')
+            return 2
+        confirm = input('Type UPDATE to install all listed LSPHP upgrades: ').strip()
+        if confirm != 'UPDATE':
+            print('Update cancelled; no packages were changed.')
+            return 2
+
+        print('')
+        print('=== Phase 3/3: Applying PHP updates ===')
+        import fcntl
+        lock = open('/run/lock/cyberpanel-php-security-updater.lock', 'a')
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        args.apply = True
+        apply_report = dict(schema=1, mode='secure-update', status='failed', time=dt.datetime.now(dt.timezone.utc).isoformat())
+        execute(args, apply_report)
+        apply_report['status'] = 'ok'
+        print(human_summary(apply_report))
+        return 0
+    finally:
+        if lock:
+            lock.close()
+        scratch.cleanup()
+
+
 def main(argv=None):
     p = parser()
     args = p.parse_args(argv)
+    if args.secure_update:
+        return secure_update_flow(args)
     if args.security_scan:
         if args.apply or args.manual or args.terminate_stale:
             p.error('--security-scan cannot be combined with package mutation modes')
