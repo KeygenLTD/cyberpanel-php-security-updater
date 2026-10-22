@@ -10,7 +10,7 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, call
 
 import updater as u
 
@@ -169,6 +169,61 @@ class PolicyTests(unittest.TestCase):
         self.assertIn('Available LSPHP package upgrades: 1', text)
         self.assertIn('No changes were made.', text)
         self.assertNotIn('"status": "ok"', text)
+
+    def test_secure_update_blocks_when_scan_has_high_finding(self):
+        args = u.parser().parse_args(['--secure-update'])
+        scan_report = {
+            'findings': [{
+                'score': 80,
+                'severity': 'CRITICAL',
+                'path': '/home/site/public_html/shell.php'
+            }]
+        }
+        with patch('security_scan.run_security_scan', return_value=scan_report), \
+             patch.object(u, 'execute') as execute:
+            result = u.secure_update_flow(args)
+        self.assertEqual(result, 2)
+        execute.assert_not_called()
+
+    def test_secure_update_clean_scan_previews_then_applies(self):
+        args = u.parser().parse_args(['--secure-update'])
+        clean_scan = {'findings': []}
+
+        def fake_execute(local_args, report):
+            report.update({
+                'preview': [{'name': 'lsphp84', 'arch': 'x86_64',
+                             'before': 'lsphp84-1.x86_64', 'after': 'lsphp84-2.x86_64'}],
+                'sites_before': [{
+                    'site': 'example.com',
+                    'handlers': [{
+                        'binary': '/usr/local/lsws/lsphp84/bin/lsphp',
+                        'php_on_disk': '8.4.27'
+                    }]
+                }],
+                'configured_php': ['/usr/local/lsws/lsphp84/bin/lsphp'],
+                'php_before': {'/usr/local/lsws/lsphp84/bin/lsphp': '8.4.27'},
+                'warnings': [],
+                'ols_before': 'active',
+            })
+            if local_args.apply:
+                report.update({
+                    'php_after': {'/usr/local/lsws/lsphp84/bin/lsphp': '8.4.28'},
+                    'sites_after': report['sites_before'],
+                    'ols_after': 'active',
+                    'processes_after': [],
+                    'transaction_completed': True,
+                })
+
+        with patch('security_scan.run_security_scan', return_value=clean_scan), \
+             patch.object(u, 'execute', side_effect=fake_execute) as execute, \
+             patch('builtins.input', side_effect=['BACKUP READY', 'UPDATE']), \
+             patch('fcntl.flock'), patch('builtins.open', unittest.mock.mock_open()):
+            result = u.secure_update_flow(args)
+
+        self.assertEqual(result, 0)
+        self.assertEqual(execute.call_count, 2)
+        self.assertFalse(execute.call_args_list[0].args[0].apply)
+        self.assertTrue(execute.call_args_list[1].args[0].apply)
 
     def test_cli_apply_without_gates_fails_before_execution(self):
         result = subprocess.run([sys.executable, 'updater.py', '--apply'],
