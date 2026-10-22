@@ -4,15 +4,32 @@ Conservative, fail-closed LSPHP package updates for **AlmaLinux 8, 9 and 10 + Cy
 
 ## Quick start
 
-For a normal CyberPanel server, start with these three commands:
+Clone once:
 
 ```bash
 git clone https://github.com/KeygenLTD/cyberpanel-php-security-updater.git
 cd cyberpanel-php-security-updater
-sudo bash bin/php-security-update
 ```
 
-The default command is **read-only**. It checks the server, detects configured/running LSPHP versions, previews available LSPHP package upgrades, and makes **no changes**.
+For the normal production workflow, use one command:
+
+```bash
+sudo bash bin/php-security-update --secure-update
+```
+
+The one-command workflow performs three guarded phases:
+
+1. Scans website files changed/created since **2026-10-10** through the current time for web-shell and compromise indicators.
+2. Shows HIGH/CRITICAL findings, the PHP package transaction preview, and websites using PHP branches that will be affected. HIGH/CRITICAL findings block package updates.
+3. After the operator confirms a current restorable backup/snapshot and types `UPDATE`, updates **all installed LSPHP branches** using the strict transaction policy, then performs post-update checks.
+
+No file is automatically deleted. LOW/MEDIUM scan findings are reported but do not automatically block PHP package updates.
+
+The plain command below remains a read-only package preview:
+
+```bash
+sudo bash bin/php-security-update
+```
 
 Example output:
 
