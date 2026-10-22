@@ -30,7 +30,9 @@ class PolicyTests(unittest.TestCase):
             'PHP 8.4.25 (litespeed) (built: Aug 25 2026)\n'
             'Copyright (c) The PHP Group\n'
         )
-        with patch.object(u, 'run', return_value=php_output) as mocked_run:
+        with patch.object(u.os.path, 'isfile', return_value=True), \
+             patch.object(u.os, 'access', return_value=True), \
+             patch.object(u, 'run', return_value=php_output) as mocked_run:
             result = u.versions([Package('lsphp84')])
 
         binary = '/usr/local/lsws/lsphp84/bin/lsphp'
@@ -38,9 +40,22 @@ class PolicyTests(unittest.TestCase):
         mocked_run.assert_called_once_with([binary, '-v'])
 
     def test_lsphp_rejects_help_instead_of_version(self):
-        with patch.object(u, 'run', return_value='Usage: lsphp\n'):
+        with patch.object(u.os.path, 'isfile', return_value=True), \
+             patch.object(u.os, 'access', return_value=True), \
+             patch.object(u, 'run', return_value='Usage: lsphp\n'):
             with self.assertRaises(RuntimeError):
                 u.versions([Package('lsphp84')])
+
+    def test_missing_lsphp_runtime_is_warning_not_crash(self):
+        warnings = []
+        with patch.object(u.os.path, 'isfile', return_value=False), \
+             patch.object(u.os, 'access', return_value=False):
+            result = u.versions([Package('lsphp84-common')], warnings)
+
+        self.assertEqual(result, {})
+        self.assertEqual(len(warnings), 1)
+        self.assertIn('Incomplete LSPHP branch 84', warnings[0])
+        self.assertIn('/usr/local/lsws/lsphp84/bin/lsphp', warnings[0])
     def validate(self, old, new, removed):
         return u.validate_transaction(old, new, removed,
                                       lambda a, b: int(a.version) - int(b.version))
