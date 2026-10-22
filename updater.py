@@ -109,11 +109,19 @@ def backup_check(path, expected):
     return dict(sha256=digest.hexdigest(), size=path.stat().st_size)
 
 
-def versions(packages):
+def versions(packages, warnings=None):
     result = {}
+    warnings = warnings if warnings is not None else []
     for name in sorted(set(re.match(r'lsphp([0-9]+)', p.name).group(1)
                            for p in packages)):
         binary = '/usr/local/lsws/lsphp{}/bin/lsphp'.format(name)
+        if not (os.path.isfile(binary) and os.access(binary, os.X_OK)):
+            warnings.append(
+                'Incomplete LSPHP branch {}: packages are installed but runtime binary is missing: {}'.format(
+                    name, binary
+                )
+            )
+            continue
         output = run([binary, '-v'])
         match = re.search(r'^PHP\s+(\d+\.\d+\.\d+)\b', output, re.MULTILINE)
         if not match:
@@ -171,13 +179,13 @@ def inventory_report(installed, report):
     if not installed:
         raise RuntimeError('No installed LSPHP packages')
     report['installed'] = sorted(str(p) for p in installed)
-    report['php_before'] = versions(installed)
+    report['warnings'] = ['Cached metadata may be stale; this is not proof that PHP is secure.']
+    report['php_before'] = versions(installed, report['warnings'])
     from site_audit import audit_sites
     report['sites_before'] = audit_sites(report['php_before'], report['processes_before'])
     for binary in report['configured_php'] + [p['binary'] for p in report['processes_before']]:
         if binary not in report['php_before']:
             raise RuntimeError('Configured/running PHP is not managed by discovered packages')
-    report['warnings'] = ['Cached metadata may be stale; this is not proof that PHP is secure.']
     if any(p['deleted'] for p in report['processes_before']):
         report['warnings'].append('Deleted LSPHP executables are still running; maintenance required.')
     for binary, version in report['php_before'].items():
@@ -281,7 +289,7 @@ def execute(args, report):
                 restart_marker.parent.mkdir(parents=True, exist_ok=True)
                 restart_marker.touch()
                 report['php_restart_marker'] = str(restart_marker)
-        report['php_after'] = versions(installed)
+        report['php_after'] = versions(installed, report.setdefault('warnings', []))
     postflight(args, report)
 
 
