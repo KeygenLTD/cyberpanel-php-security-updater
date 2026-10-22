@@ -229,6 +229,40 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(execute.call_count, 2)
         self.assertEqual(apply_states, [False, True])
 
+    def test_secure_update_can_continue_without_backup_after_explicit_yes(self):
+        args = u.parser().parse_args(['--secure-update'])
+        clean_scan = {'findings': []}
+        apply_states = []
+
+        def fake_execute(local_args, report):
+            apply_states.append(local_args.apply)
+            report.update({
+                'preview': [{'name': 'lsphp84', 'arch': 'x86_64',
+                             'before': 'lsphp84-1.x86_64', 'after': 'lsphp84-2.x86_64'}],
+                'sites_before': [],
+                'configured_php': [],
+                'php_before': {},
+                'warnings': [],
+                'ols_before': 'active',
+            })
+            if local_args.apply:
+                report.update({
+                    'php_after': {},
+                    'sites_after': [],
+                    'ols_after': 'active',
+                    'processes_after': [],
+                    'transaction_completed': True,
+                })
+
+        with patch('security_scan.run_security_scan', return_value=clean_scan), \
+             patch.object(u, 'execute', side_effect=fake_execute), \
+             patch('builtins.input', side_effect=['n', 'y', 'y']), \
+             patch('fcntl.flock'), patch('builtins.open', mock_open()):
+            result = u.secure_update_flow(args)
+
+        self.assertEqual(result, 0)
+        self.assertEqual(apply_states, [False, True])
+
     def test_cli_apply_without_gates_fails_before_execution(self):
         result = subprocess.run([sys.executable, 'updater.py', '--apply'],
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,

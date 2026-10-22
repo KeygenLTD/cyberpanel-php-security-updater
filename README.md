@@ -12,11 +12,16 @@ sudo bash -c 'set -e; d=/opt/cyberpanel-php-security-updater; if [ -d "$d/.git" 
 
 Run that same one-liner again on another server or later on the same server; it updates the local copy before starting the secure workflow.
 
+
+> **Backup strongly recommended:** Before allowing any PHP package update, create a current, restorable server snapshot/backup that covers websites, databases, CyberPanel/OpenLiteSpeed configuration and PHP/package state. **Do not run package updates without a tested recovery path.**
+>
+> The tool can let an operator explicitly continue without confirming a backup, but this is an emergency override—not the recommended workflow. A failed package transaction, incompatible extension, stale worker, application regression or unrelated server problem may require restoration. If you cannot restore the server, answer **N** and stop.
+
 The one-command workflow performs three guarded phases:
 
 1. Scans website files changed/created since **2026-10-10** through the current time for web-shell and compromise indicators.
 2. Shows HIGH/CRITICAL findings for interactive review, then shows the PHP package transaction preview and websites using PHP branches that will be affected. The operator may quarantine, inspect, stop, or explicitly continue.
-3. After the operator answers the backup and update confirmation questions with `y`, updates **all installed LSPHP branches** using the strict transaction policy, then performs post-update checks.
+3. After the operator answers the backup and update confirmation questions, the tool updates **all installed LSPHP branches** using the strict transaction policy, then performs post-update checks. If no restorable backup is confirmed, it asks a second explicit [y/N] question before allowing the operator to continue without one.
 
 No file is automatically deleted. LOW/MEDIUM scan findings are reported but do not automatically block PHP package updates.
 
