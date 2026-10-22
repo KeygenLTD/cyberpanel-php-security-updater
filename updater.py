@@ -466,8 +466,8 @@ def secure_update_flow(args):
         review_report = dict(scan_report)
         review_report['findings'] = severe
         interactive_review(review_report)
-        proceed = input('Type CONTINUE to proceed to PHP update preview, or anything else to stop: ').strip()
-        if proceed != 'CONTINUE':
+        proceed = input('Continue to PHP update preview after security review? [y/N]: ').strip().lower()
+        if proceed not in ('y', 'yes'):
             print('Stopped after security review; no packages were changed.')
             return 2
 
