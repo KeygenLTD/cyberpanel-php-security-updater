@@ -49,6 +49,34 @@ class PolicyTests(unittest.TestCase):
         old, new = Package(), Package(version='2')
         self.assertEqual(self.validate([old], [new], [old])[0]['name'], 'lsphp82')
 
+    def test_active_php_packages_only_selects_configured_or_running_branches(self):
+        installed = [
+            Package('lsphp74'), Package('lsphp74-common'),
+            Package('lsphp84'), Package('lsphp84-common'),
+            Package('lsphp85'), Package('lsphp85-common'),
+        ]
+        report = {
+            'configured_php': ['/usr/local/lsws/lsphp84/bin/lsphp'],
+            'processes_before': [
+                {'binary': '/usr/local/lsws/lsphp84/bin/lsphp'}
+            ],
+        }
+        selected = u.active_php_packages(installed, report)
+        self.assertEqual(sorted(p.name for p in selected), ['lsphp84', 'lsphp84-common'])
+        self.assertEqual(report['target_php_branches'], ['84'])
+
+    def test_active_php_packages_includes_running_branch(self):
+        installed = [Package('lsphp83'), Package('lsphp83-common'), Package('lsphp84')]
+        report = {
+            'configured_php': ['/usr/local/lsws/lsphp84/bin/lsphp'],
+            'processes_before': [
+                {'binary': '/usr/local/lsws/lsphp83/bin/lsphp'}
+            ],
+        }
+        selected = u.active_php_packages(installed, report)
+        self.assertEqual(sorted(p.name for p in selected), ['lsphp83', 'lsphp83-common', 'lsphp84'])
+        self.assertEqual(report['target_php_branches'], ['83', '84'])
+
     def test_no_updates(self):
         self.assertEqual(self.validate([Package()], [], []), [])
 
