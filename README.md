@@ -4,16 +4,24 @@ Conservative, fail-closed LSPHP package updates for **AlmaLinux 8, 9 and 10 + Cy
 
 ## Quick start
 
-Clone once:
+Install once:
 
 ```bash
 git clone https://github.com/KeygenLTD/cyberpanel-php-security-updater.git
 cd cyberpanel-php-security-updater
+sudo ln -sf "$PWD/bin/php-security-update" /usr/local/bin/php-security-update
 ```
 
-For the normal production workflow, use one command:
+After that, the normal production workflow is one command from **any directory**:
 
 ```bash
+sudo php-security-update --secure-update
+```
+
+If you do not want a global command, run it from inside the cloned repository instead:
+
+```bash
+cd cyberpanel-php-security-updater
 sudo bash bin/php-security-update --secure-update
 ```
 
