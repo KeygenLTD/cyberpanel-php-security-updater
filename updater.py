@@ -183,9 +183,35 @@ def inventory_report(installed, report):
     report['php_before'] = versions(installed, report['warnings'])
     from site_audit import audit_sites
     report['sites_before'] = audit_sites(report['php_before'], report['processes_before'])
-    for binary in report['configured_php'] + [p['binary'] for p in report['processes_before']]:
-        if binary not in report['php_before']:
-            raise RuntimeError('Configured/running PHP is not managed by discovered packages')
+
+    configured_missing = sorted(
+        binary for binary in report['configured_php']
+        if binary not in report['php_before']
+    )
+    if configured_missing:
+        for binary in configured_missing:
+            affected_sites = sorted(
+                site.get('site', 'unknown')
+                for site in report['sites_before']
+                for handler in site.get('handlers', [])
+                if handler.get('binary') == binary
+            )
+            suffix = ' (sites: {})'.format(', '.join(affected_sites)) if affected_sites else ''
+            report['warnings'].append(
+                'Configured PHP handler has no discovered runtime/package: {}{}'.format(binary, suffix)
+            )
+
+    running_missing = sorted(set(
+        p['binary'] for p in report['processes_before']
+        if p['binary'] not in report['php_before']
+    ))
+    if running_missing:
+        raise RuntimeError(
+            'Running PHP process is not managed by discovered packages: {}'.format(
+                ', '.join(running_missing)
+            )
+        )
+
     if any(p['deleted'] for p in report['processes_before']):
         report['warnings'].append('Deleted LSPHP executables are still running; maintenance required.')
     for binary, version in report['php_before'].items():

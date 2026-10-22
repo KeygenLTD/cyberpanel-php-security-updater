@@ -118,6 +118,48 @@ class PolicyTests(unittest.TestCase):
                     path.write_text('ID=ubuntu\nVERSION_ID="{}"'.format(release))
                     self.assertEqual(u.platform_check(path), 'ubuntu:' + release)
 
+    def test_configured_missing_php_warns_instead_of_crashing(self):
+        report = {
+            'configured_php': ['/usr/local/lsws/lsphp84/bin/lsphp'],
+            'processes_before': [],
+        }
+        installed = [Package('lsphp83')]
+        sites = [{
+            'site': 'example.com',
+            'handlers': [{
+                'binary': '/usr/local/lsws/lsphp84/bin/lsphp'
+            }]
+        }]
+
+        with patch.object(u, 'versions', return_value={
+                 '/usr/local/lsws/lsphp83/bin/lsphp': '8.3.31'
+             }), \
+             patch('site_audit.audit_sites', return_value=sites):
+            u.inventory_report(installed, report)
+
+        self.assertTrue(any('Configured PHP handler has no discovered runtime/package' in w
+                            for w in report['warnings']))
+
+    def test_running_missing_php_still_fails_closed(self):
+        report = {
+            'configured_php': [],
+            'processes_before': [{
+                'binary': '/usr/local/lsws/lsphp84/bin/lsphp',
+                'deleted': False,
+                'pid': 123,
+                'uid': 1000,
+                'start': '1',
+            }],
+        }
+        installed = [Package('lsphp83')]
+
+        with patch.object(u, 'versions', return_value={
+                 '/usr/local/lsws/lsphp83/bin/lsphp': '8.3.31'
+             }), \
+             patch('site_audit.audit_sites', return_value=[]):
+            with self.assertRaisesRegex(RuntimeError, 'Running PHP process is not managed'):
+                u.inventory_report(installed, report)
+
     def test_manual_commands_do_not_execute(self):
         report = {'backend': 'apt', 'installed': ['lsphp82:amd64=8.2.34'], 'warnings': []}
         with patch.object(u, 'run') as run:
