@@ -1,20 +1,61 @@
 # CyberPanel PHP Security Updater
 
-Conservative, fail-closed LSPHP package updates for **AlmaLinux 8 and 10 + CyberPanel + OpenLiteSpeed**. No remote script execution, broad `dnf upgrade`, automatic SIGKILL, PHP branch migration, firewall changes or automatic rollback.
+Conservative, fail-closed LSPHP package updates for **AlmaLinux 8, 9 and 10 + CyberPanel + OpenLiteSpeed**. No remote script execution, broad `dnf upgrade`, automatic SIGKILL, PHP branch migration, firewall changes or automatic rollback.
 
-## Run
+## Quick start
 
-Clone and review a pinned revision, then one command runs the default check:
+For a normal CyberPanel server, start with these three commands:
 
 ```bash
+git clone https://github.com/KeygenLTD/cyberpanel-php-security-updater.git
+cd cyberpanel-php-security-updater
 sudo bash bin/php-security-update
-# Optional persistent JSON + text reports (prefix must not already exist):
-sudo bash bin/php-security-update --check --report-prefix /root/php-check-20261022
 ```
 
-Check reads RPM inventory, OLS identity/status, configured absolute PHP handlers and `/proc/PID/exe`, prints versions and a structured DNF transaction preview. DNF cache-only APIs create locks, so the tool copies metadata to a private temporary directory and isolates cache/persist/log writes there; temporary files are removed on exit. It does not refresh repositories, install packages, signal processes or change server configuration. Explicit report output writes only the requested files (0600). It requires root for reliable process visibility. Missing cache/repositories/bindings or unsupported systems fail closed, exit 2. Cache results are **not proof of current security coverage**. Refresh metadata separately under your normal operations procedure before checking.
+The default command is **read-only**. It checks the server, detects configured/running LSPHP versions, previews available LSPHP package upgrades, and makes **no changes**.
 
-Python bindings for **DNF4** and RPM must already exist. EL8 normally uses `/usr/libexec/platform-python` (3.6); EL10 uses `/usr/bin/python3`. No automatic dependency installation. DNF5-only installations are refused. AlmaLinux 9 and non-AlmaLinux systems are intentionally unsupported by this release. Repository availability and signing trust must be established by the administrator; the tool never adds repositories or imports keys.
+Example output:
+
+```text
+CyberPanel PHP Security Updater
+
+[OK] OpenLiteSpeed is running.
+
+PHP used by configured sites:
+  8.4.25  (/usr/local/lsws/lsphp84/bin/lsphp)
+
+Detected sites with resolved PHP handlers: 1
+  - example.com
+
+Available LSPHP package upgrades: 25
+Upgrade candidates by PHP branch:
+  PHP 8.4: 25 packages
+
+No changes were made.
+```
+
+For full machine-readable output:
+
+```bash
+sudo bash bin/php-security-update --json
+```
+
+To also save persistent JSON and text reports:
+
+```bash
+sudo bash bin/php-security-update --check   --report-prefix /root/php-check-20261022
+```
+
+The check requires root for reliable process visibility. It does not install packages, signal processes, change server configuration, add repositories, or import signing keys.
+
+Supported platforms in this release:
+
+- AlmaLinux 8, 9 and 10
+- Ubuntu 22.04 and 24.04
+- CyberPanel
+- OpenLiteSpeed
+
+Required OS package-manager Python bindings must already exist. Unsupported or incomplete environments fail closed with exit code 2.
 
 ## Apply gates
 
@@ -41,11 +82,11 @@ Running and stale workers are discovered via `/proc/PID/exe`, not `ps` text. `(d
 
 `--terminate-stale` explicitly enables SIGTERM **inside the approved maintenance window**, using Linux pidfds plus process-start identity rechecks to avoid PID-reuse races. Only deleted executables under the supported LSPHP binary paths are targeted. The tool waits up to `--term-timeout` (default 60 seconds), then fails without SIGKILL. SIGTERM can interrupt active requests: drain traffic and arrange a maintenance page externally first. The window is checked before download/transaction and each signal/wait; an RPM transaction already in progress cannot safely be interrupted when the window expires. Reserve enough time for the entire operation.
 
-**EL8 difference:** stock platform-python lacks pidfd APIs. Asking it to terminate workers fails before any update. Use a compatible administrator-managed Python with DNF4 bindings and kernel pidfd support, or follow OpenLiteSpeed's documented detached-PHP restart procedure during maintenance and rerun check. The wrapper deliberately prefers the OS DNF interpreter; it does not replace system Python. EL10 must also expose both pidfd APIs. No automatic OLS restart or restart marker is written.
+**EL8 difference:** stock platform-python lacks pidfd APIs. Asking it to terminate workers fails before any update. Use a compatible administrator-managed Python with DNF4 bindings and kernel pidfd support, or follow OpenLiteSpeed's documented detached-PHP restart procedure during maintenance and rerun check. The wrapper deliberately prefers the OS DNF interpreter; it does not replace system Python. EL9 and EL10 must also expose both pidfd APIs (stock EL9 Python 3.9 and kernel 5.14 provide the required baseline; runtime capability checks still apply). No automatic OLS restart or restart marker is written.
 
 After applying, the tool checks exact updated RPM EVRs, executes every discovered PHP binary with `-n` to read PHP_VERSION, checks `lsws` is active, and reports any stale workers. CLI versions and service status do **not** prove the PHP version served by each virtual host. Verify websites through their real HTTPS paths, application tests and monitoring before restoring traffic. PHP settings and extensions should be validated through those application tests. Config discovery covers standard `httpd_config.conf` and `conf/vhosts/*/*.conf` absolute handler paths; custom includes/relative handlers require manual review. No automatic rollback is attempted: DNF history undo is not a dependable backup strategy. On failure use the independently tested restore procedure.
 
-JSON is printed to stdout (alongside an explicit preview); requested `.json` is a single JSON document. `.txt` contains readable key/value sections. Exit 0 = requested checks passed under the stated limits; 2 = blocked/failed/incomplete. Reports include package versions and process IDs and should be kept private. Partial transactions are reported and must be investigated. Keep terminal output if persistent reports cannot be written.
+Human-readable output is printed by default. Use `--json` for the full machine-readable JSON document. Requested `.json` report files contain a single JSON document and `.txt` contains readable key/value sections. Exit 0 = requested checks passed under the stated limits; 2 = blocked/failed/incomplete. Reports include package versions and process IDs and should be kept private. Partial transactions are reported and must be investigated. Keep terminal output if persistent reports cannot be written.
 
 ## Validation
 
@@ -54,10 +95,10 @@ python3 -m unittest discover -s tests -v
 shellcheck bin/php-security-update
 docker run --rm -e LSPHP_CONTAINER_TEST=1 -v "$PWD:/src:ro" -w /src almalinux:8 \
   bash -c 'dnf -y install python3 python3-dnf rpm-build && PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v'
-# Repeat with almalinux:10.
+# Repeat with almalinux:9 and almalinux:10.
 ```
 
-Unit tests exercise transaction rejection, backups, maintenance windows, `/proc` parsing and CLI gates/reports. Integration tests build synthetic RPMs **only in tests**, resolve and execute real DNF transactions in a temporary installroot, verify RPM persistence and reject unrelated changes. They require explicit opt-in plus a disposable Docker environment. GitHub Actions runs lint/unit and the AlmaLinux 8/10 matrix. These do not replace a full CyberPanel/OLS VM staging test, real signed LiteSpeed repository testing, or application-level validation. No real server apply is performed as part of development.
+Unit tests exercise transaction rejection, backups, maintenance windows, `/proc` parsing and CLI gates/reports. Integration tests build synthetic RPMs **only in tests**, resolve and execute real DNF transactions in a temporary installroot, verify RPM persistence and reject unrelated changes. They require explicit opt-in plus a disposable Docker environment. GitHub Actions runs lint/unit and the AlmaLinux 8/9/10 matrix. These do not replace a full CyberPanel/OLS VM staging test, real signed LiteSpeed repository testing, or application-level validation. No real server apply is performed as part of development.
 
 ## References
 
@@ -68,3 +109,22 @@ Unit tests exercise transaction rejection, backups, maintenance windows, `/proc`
 - [PHP support lifecycle](https://www.php.net/supported-versions.php)
 
 Production-oriented safeguards do not imply production certification. See validation results and deployment limitations before use.
+
+## Ubuntu 22.04 / 24.04
+
+Ubuntu support requires CyberPanel, OpenLiteSpeed, and the OS-provided
+python3-apt bindings. The updater does not install dependencies or add
+package repositories.
+
+- `--check`: inspect installed LSPHP packages and preview the transaction.
+- `--manual`: show suggested commands without executing them.
+- `--apply`: requires explicit approval, a verified backup, restore
+  attestation, and a maintenance window.
+
+APT transactions reject unrelated package changes, removals, reinstalls,
+downgrades, and candidates without trusted signed repository metadata.
+A successful CLI check does not replace live website verification.
+
+Ubuntu APT integration tests run in disposable Ubuntu 22.04 and 24.04
+containers in GitHub Actions. Production updates must first be validated
+in a staging environment.

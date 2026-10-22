@@ -25,6 +25,22 @@ class Package:
 
 
 class PolicyTests(unittest.TestCase):
+    def test_lsphp_version_detection(self):
+        php_output = (
+            'PHP 8.4.25 (litespeed) (built: Aug 25 2026)\n'
+            'Copyright (c) The PHP Group\n'
+        )
+        with patch.object(u, 'run', return_value=php_output) as mocked_run:
+            result = u.versions([Package('lsphp84')])
+
+        binary = '/usr/local/lsws/lsphp84/bin/lsphp'
+        self.assertEqual(result[binary], '8.4.25')
+        mocked_run.assert_called_once_with([binary, '-v'])
+
+    def test_lsphp_rejects_help_instead_of_version(self):
+        with patch.object(u, 'run', return_value='Usage: lsphp\n'):
+            with self.assertRaises(RuntimeError):
+                u.versions([Package('lsphp84')])
     def validate(self, old, new, removed):
         return u.validate_transaction(old, new, removed,
                                       lambda a, b: int(a.version) - int(b.version))
@@ -69,7 +85,7 @@ class PolicyTests(unittest.TestCase):
     def test_unsupported_os(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'os-release'
-            for content in ('ID=ubuntu\nVERSION_ID=24.04', 'ID=almalinux\nVERSION_ID=7'):
+            for content in ('ID=ubuntu\nVERSION_ID=20.04', 'ID=almalinux\nVERSION_ID=7'):
                 path.write_text(content)
                 with self.assertRaises(RuntimeError):
                     u.platform_check(path)
@@ -83,6 +99,17 @@ class PolicyTests(unittest.TestCase):
                 for major in ('8', '9', '10'):
                     path.write_text('ID=almalinux\nVERSION_ID="{}.0"'.format(major))
                     self.assertEqual(u.platform_check(path), major)
+                for release in ('22.04', '24.04'):
+                    path.write_text('ID=ubuntu\nVERSION_ID="{}"'.format(release))
+                    self.assertEqual(u.platform_check(path), 'ubuntu:' + release)
+
+    def test_manual_commands_do_not_execute(self):
+        report = {'backend': 'apt', 'installed': ['lsphp82:amd64=8.2.34'], 'warnings': []}
+        with patch.object(u, 'run') as run:
+            u.manual_commands([Package()], report)
+        run.assert_not_called()
+        self.assertIn('--simulate', report['manual_commands'][0])
+        self.assertIn('--no-remove', report['manual_commands'][1])
 
     def test_proc_deleted_and_start_identity(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -106,6 +133,43 @@ class PolicyTests(unittest.TestCase):
             self.assertEqual(json.loads(Path(prefix + '.json').read_text())['status'], 'ok')
             self.assertIn('mode: "check"', Path(prefix + '.txt').read_text())
 
+
+    def test_default_human_summary(self):
+        def fake(args, report):
+            report['ols_before'] = 'active'
+            report['configured_php'] = ['/usr/local/lsws/lsphp84/bin/lsphp']
+            report['php_before'] = {
+                '/usr/local/lsws/lsphp84/bin/lsphp': '8.4.25'
+            }
+            report['sites_before'] = [
+                {
+                    'site': 'example.com',
+                    'handlers': [{'binary': '/usr/local/lsws/lsphp84/bin/lsphp'}]
+                }
+            ]
+            report['preview'] = [
+                {
+                    'name': 'lsphp84',
+                    'arch': 'x86_64',
+                    'before': 'lsphp84-8.4.25-1.el9.x86_64',
+                    'after': 'lsphp84-8.4.27-1.el9.x86_64'
+                }
+            ]
+            report['warnings'] = []
+
+        with patch.object(u, 'execute', side_effect=fake), \
+             contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(u.main([]), 0)
+
+        text = out.getvalue()
+        self.assertIn('CyberPanel PHP Security Updater', text)
+        self.assertIn('[OK] OpenLiteSpeed is running.', text)
+        self.assertIn('8.4.25', text)
+        self.assertIn('example.com', text)
+        self.assertIn('Available LSPHP package upgrades: 1', text)
+        self.assertIn('No changes were made.', text)
+        self.assertNotIn('"status": "ok"', text)
+
     def test_cli_apply_without_gates_fails_before_execution(self):
         result = subprocess.run([sys.executable, 'updater.py', '--apply'],
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -115,7 +179,7 @@ class PolicyTests(unittest.TestCase):
 
     def test_failure_report(self):
         with patch.object(u, 'execute', side_effect=RuntimeError('blocked')), contextlib.redirect_stdout(io.StringIO()) as out:
-            self.assertEqual(u.main([]), 2)
+            self.assertEqual(u.main(['--json']), 2)
         self.assertEqual(json.loads(out.getvalue())['error'], 'blocked')
 
     def test_sigterm_only_targets_deleted_worker(self):
@@ -154,6 +218,39 @@ class PolicyTests(unittest.TestCase):
                 u.terminate_stale(args)
         send.assert_called_once_with(9, u.signal.SIGTERM)
 
+    def test_report_partial_write_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = str(Path(directory) / 'result')
+
+            # Simulate failure when creating the second report file.
+            original_open = u.os.open
+
+            def failing_open(path, flags, mode=0o777, **kwargs):
+                if str(path).endswith('.txt'):
+                    raise OSError('Simulated report write failure')
+                return original_open(path, flags, mode, **kwargs)
+
+            with patch.object(u, 'execute'), \
+                 patch.object(u.os, 'open', side_effect=failing_open), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaises(OSError):
+                    u.main(['--report-prefix', prefix])
+
+            self.assertFalse(Path(prefix + '.json').exists())
+            self.assertFalse(Path(prefix + '.txt').exists())
+
+    def test_temporary_directory_creation_failure(self):
+        with patch.object(
+            u.tempfile,
+            'TemporaryDirectory',
+            side_effect=OSError('Simulated disk full')
+        ), contextlib.redirect_stdout(io.StringIO()) as out:
+            result = u.main(['--json'])
+
+        self.assertEqual(result, 2)
+        report = json.loads(out.getvalue())
+        self.assertEqual(report['status'], 'failed')
+        self.assertIn('Simulated disk full', report['error'])
 
 if __name__ == '__main__':
     unittest.main()
