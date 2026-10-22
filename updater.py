@@ -293,6 +293,8 @@ def parser():
     mode = p.add_mutually_exclusive_group()
     mode.add_argument('--check', action='store_true', help='default: cached, read-only preview')
     mode.add_argument('--apply', action='store_true')
+    mode.add_argument('--secure-update', action='store_true',
+                      help='one-command security scan, impact preview and interactive LSPHP update')
     p.add_argument('--manual', action='store_true', help='check and print manual commands; execute nothing')
     p.add_argument('--approve', choices=['APPLY-LSPHP-UPDATES'])
     p.add_argument('--backup')
@@ -398,6 +400,199 @@ def human_summary(report):
 
     return '\n'.join(lines)
 
+
+
+def update_impact_summary(report):
+    preview = report.get('preview', [])
+    branches = set()
+    for item in preview:
+        match = re.match(r'lsphp([0-9]{2,3})', item.get('name', ''))
+        if match:
+            branches.add(match.group(1))
+
+    affected = []
+    for site in report.get('sites_before', []):
+        matched = []
+        for handler in site.get('handlers', []):
+            binary = handler.get('binary') or ''
+            match = re.search(r'/lsphp([0-9]{2,3})/bin/lsphp    p = parser()
+    args = p.parse_args(argv)
+    if args.secure_update:
+        return secure_update_flow(args)
+    if args.security_scan:
+        if args.apply or args.manual or args.terminate_stale:
+            p.error('--security-scan cannot be combined with package mutation modes')
+        from security_scan import run_security_scan
+        try:
+            run_security_scan(days=args.days, deep=args.deep,
+                              interactive=args.interactive, json_output=args.json,
+                              since=args.since)
+            return 0
+        except (Exception, KeyboardInterrupt) as exc:
+            if args.json:
+                print(json.dumps({'schema': 1, 'mode': 'security-scan', 'status': 'failed',
+                                  'error': str(exc)}, indent=2, sort_keys=True))
+            else:
+                print('CyberPanel Security Scan\n\n[FAILED] {}'.format(exc))
+            return 2
+    if args.deep or args.interactive or args.days != 7 or args.since:
+        p.error('--days/--since/--deep/--interactive require --security-scan')
+    if args.manual and args.apply:
+        p.error('--manual is read-only and cannot be combined with --apply')
+    if args.apply and not args.secure_update and not all((args.approve, args.backup, args.backup_sha256,
+                               args.restore_tested, args.window_start, args.window_end)):
+        p.error('--apply requires approval, backup + SHA256, restore attestation and maintenance window')
+    if args.terminate_stale and not args.apply:
+        p.error('--terminate-stale requires --apply')
+    if not 1 <= args.term_timeout <= 3600:
+        p.error('--term-timeout must be 1..3600')
+    if args.report_prefix and any(os.path.lexists(args.report_prefix + suffix) for suffix in ('.json', '.txt')):
+        p.error('Report files already exist; choose a fresh prefix')
+    report = dict(schema=1, mode='apply' if args.apply else 'check', status='failed',
+                  time=dt.datetime.now(dt.timezone.utc).isoformat())
+    lock = None
+    scratch = None
+    try:
+        scratch = tempfile.TemporaryDirectory(prefix='lsphp-check-')
+        args.scratch = scratch.name
+        if args.apply:
+            window(args.window_start, args.window_end)
+            backup_check(args.backup, args.backup_sha256)
+            import fcntl
+            lock = open('/run/lock/cyberpanel-php-security-updater.lock', 'a')
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        execute(args, report)
+        report['status'] = 'ok'
+    except (Exception, KeyboardInterrupt) as exc:
+        report['error'] = str(exc)
+    finally:
+        if lock:
+            lock.close()
+        if scratch is not None:
+            scratch.cleanup()
+    encoded = json.dumps(report, indent=2, sort_keys=True)
+    text = '\n'.join('{}: {}'.format(k, json.dumps(v, sort_keys=True)) for k, v in sorted(report.items())) + '\n'
+    if args.json:
+        print(encoded)
+    else:
+        print(human_summary(report))
+    if args.report_prefix:
+        created = []
+        try:
+            for suffix, content in (('.json', encoded + '\n'), ('.txt', text)):
+                path = args.report_prefix + suffix
+
+                # Never overwrite existing reports or symlinks.
+                fd = os.open(
+                    path,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o600
+                )
+                created.append(path)
+
+                with os.fdopen(fd, 'w') as stream:
+                    stream.write(content)
+
+        except OSError:
+            # Remove only files created by this invocation.
+            for path in reversed(created):
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+            raise
+    return 0 if report['status'] == 'ok' else 2
+
+
+if __name__ == '__main__':
+    sys.exit(main())
+, binary)
+            if match and match.group(1) in branches:
+                matched.append({
+                    'binary': binary,
+                    'version': handler.get('php_on_disk') or 'unknown'
+                })
+        if matched:
+            affected.append((site.get('site', 'unknown'), matched))
+
+    print('')
+    print('PHP update impact')
+    print('  Package upgrades: {}'.format(len(preview)))
+    if branches:
+        print('  PHP branches: {}'.format(', '.join(sorted(branches))))
+    if affected:
+        print('  Sites using PHP branches that will be updated:')
+        for site, handlers in affected:
+            versions = ', '.join(sorted(set(h['version'] for h in handlers)))
+            print('    - {} (PHP {})'.format(site, versions))
+    else:
+        print('  No configured site handler was resolved to an upgrading PHP branch.')
+    return affected
+
+
+def secure_update_flow(args):
+    from security_scan import run_security_scan
+
+    since = args.since or '2026-10-10'
+    print('=== Phase 1/3: Security scan ===')
+    scan_report = run_security_scan(
+        days=args.days,
+        deep=False,
+        interactive=False,
+        json_output=False,
+        since=since
+    )
+
+    severe = [f for f in scan_report.get('findings', []) if f.get('score', 0) >= 55]
+    if severe:
+        print('')
+        print('[BLOCKED] HIGH/CRITICAL security findings detected: {}'.format(len(severe)))
+        for finding in severe:
+            print('  [{}] {}  score={}/100'.format(
+                finding.get('severity'), finding.get('path'), finding.get('score')))
+        print('Review/quarantine these findings before package update.')
+        return 2
+
+    print('')
+    print('=== Phase 2/3: PHP update preview ===')
+    original_apply = args.apply
+    args.apply = False
+    preview_report = dict(schema=1, mode='check', status='failed',
+                          time=dt.datetime.now(dt.timezone.utc).isoformat())
+    execute(args, preview_report)
+    preview_report['status'] = 'ok'
+    update_impact_summary(preview_report)
+
+    if not preview_report.get('preview'):
+        print('')
+        print('[OK] No LSPHP package upgrades are currently available.')
+        args.apply = original_apply
+        return 0
+
+    print('')
+    backup = input('Confirm a current restorable backup/snapshot exists. Type BACKUP READY: ').strip()
+    if backup != 'BACKUP READY':
+        print('Update cancelled; no packages were changed.')
+        args.apply = original_apply
+        return 2
+
+    confirm = input('Type UPDATE to install all listed LSPHP upgrades: ').strip()
+    if confirm != 'UPDATE':
+        print('Update cancelled; no packages were changed.')
+        args.apply = original_apply
+        return 2
+
+    print('')
+    print('=== Phase 3/3: Applying PHP updates ===')
+    args.apply = True
+    args.secure_update = True
+    apply_report = dict(schema=1, mode='secure-update', status='failed',
+                        time=dt.datetime.now(dt.timezone.utc).isoformat())
+    execute(args, apply_report)
+    apply_report['status'] = 'ok'
+    print(human_summary(apply_report))
+    args.apply = original_apply
+    return 0
 
 
 def main(argv=None):
