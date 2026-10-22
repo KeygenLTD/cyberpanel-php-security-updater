@@ -185,6 +185,332 @@ def inventory_report(installed, report):
             report['warnings'].append('Upstream EOL: {} = {}; vendor backports require independent verification'.format(binary, version))
 
 
+def active_php_packages(installed, report):
+    binaries = set(report.get('configured_php', []))
+    binaries.update(p['binary'] for p in report.get('processes_before', []))
+    branches = set()
+    for binary in binaries:
+        match = re.search(r'/lsphp([0-9]{2,3})/bin/lsphp    names = ' '.join(sorted(set(p.name for p in installed)))
+    if report['backend'] == 'apt':
+        command = 'sudo apt-get --only-upgrade --no-remove --no-install-recommends install ' + names
+        preview = command.replace('apt-get ', 'apt-get --simulate ', 1)
+    else:
+        command = 'sudo dnf --best --setopt=install_weak_deps=False upgrade ' + names
+        preview = command.replace('dnf ', 'dnf --assumeno ', 1)
+    report['manual_commands'] = [preview, command]
+    report['warnings'].append('Manual commands are NOT executed or policy-enforced by this tool. Validate backup, window and exact transaction; decline unrelated changes.')
+
+
+def execute(args, report):
+    preflight(args, report)
+    if report['os_major'].startswith('ubuntu:'):
+        from apt_backend import execute_apt
+        return execute_apt(args, report)
+    import dnf
+    import rpm
+    report['backend'] = 'dnf4'
+    with dnf.Base() as base:
+        base.conf.read()
+        if base.conf.installroot != '/':
+            raise RuntimeError('Custom DNF installroot is unsupported')
+        if not args.apply:
+            # DNF's cache-only API still creates metadata locks; isolate those writes.
+            shutil.copytree(base.conf.cachedir, args.scratch + '/cache',
+                            ignore=shutil.ignore_patterns('packages', '*.rpm', '*.pid', '*.lock'))
+            base.conf.cachedir = args.scratch + '/cache'
+            base.conf.persistdir = args.scratch + '/persist'
+            base.conf.logdir = args.scratch
+            base.conf.gpgkey_dns_verification = False
+        if set(base.conf.tsflags) - {'nodocs'}:
+            raise RuntimeError('Unsafe/custom DNF tsflags; refusing transaction')
+        base.conf.plugins = False
+        base.conf.cacheonly = not args.apply
+        base.conf.logfilelevel = 0
+        base.conf.debuglevel = 0
+        base.conf.best = True
+        base.conf.install_weak_deps = False
+        base.conf.gpgcheck = True
+        base.read_all_repos()
+        if not list(base.repos.iter_enabled()):
+            raise RuntimeError('No enabled repositories')
+        for repo in base.repos.iter_enabled():
+            repo.skip_if_unavailable = False
+            repo.gpgcheck = True
+            if args.apply:
+                repo.metadata_expire = 0
+        if args.apply:
+            base.fill_sack()
+        else:
+            base.fill_sack_from_repos_in_cache()
+        installed = [p for p in base.sack.query().installed() if PACKAGE.fullmatch(p.name)]
+        inventory_report(installed, report)
+        target_installed = active_php_packages(installed, report)
+        if args.manual:
+            manual_commands(target_installed, report)
+        for name in sorted(set(p.name for p in target_installed)):
+            base.upgrade(name)
+        base.resolve(allow_erasing=False)
+        incoming = list(base.transaction.install_set)
+        outgoing = list(base.transaction.remove_set)
+        compare = lambda a, b: rpm.labelCompare((str(a.epoch), a.version, a.release),
+                                                (str(b.epoch), b.version, b.release))
+        report['preview'] = validate_transaction(installed, incoming, outgoing, compare)
+        if args.json:
+            print(json.dumps({'transaction_preview': report['preview']}, indent=2), flush=True)
+        if not args.apply:
+            return
+        report['backup'] = backup_check(args.backup, args.backup_sha256)
+        window(args.window_start, args.window_end)
+        if incoming:
+            base.download_packages(incoming)
+            for pkg in incoming:
+                code, message = base.package_signature_check(pkg)
+                if code != 0:
+                    raise RuntimeError('RPM signature check failed: ' + message)
+            window(args.window_start, args.window_end)
+            report['transaction_started'] = True
+            base.do_transaction()
+            report['transaction_completed'] = True
+            # Compare exact expected RPM state after the transaction.
+            for pkg in incoming:
+                actual = run(['rpm', '-q', '--qf', '%{EPOCHNUM}:%{VERSION}-%{RELEASE}',
+                              pkg.name + '.' + pkg.arch])
+                if actual != '{}:{}-{}'.format(pkg.epoch, pkg.version, pkg.release):
+                    raise RuntimeError('Post-transaction RPM verification failed')
+        report['php_after'] = versions(installed)
+    postflight(args, report)
+
+
+def postflight(args, report):
+    if args.terminate_stale:
+        terminate_stale(args)
+    report['processes_after'] = processes()
+    from site_audit import audit_sites
+    report['sites_after'] = audit_sites(report['php_after'], report['processes_after'])
+    report['ols_after'] = run(['systemctl', 'is-active', 'lsws'])
+    if report['ols_after'] != 'active' or any(p['deleted'] for p in report['processes_after']):
+        raise RuntimeError('Post-check incomplete: OLS inactive or stale PHP workers remain')
+    report['warnings'].append('CLI and service checks passed; verify each website through its real HTTP path.')
+
+
+def parser():
+    p = argparse.ArgumentParser(description=__doc__)
+    mode = p.add_mutually_exclusive_group()
+    mode.add_argument('--check', action='store_true', help='default: cached, read-only preview')
+    mode.add_argument('--apply', action='store_true')
+    p.add_argument('--manual', action='store_true', help='check and print manual commands; execute nothing')
+    p.add_argument('--approve', choices=['APPLY-LSPHP-UPDATES'])
+    p.add_argument('--backup')
+    p.add_argument('--backup-sha256')
+    p.add_argument('--restore-tested', action='store_true', help='operator attests restore was tested')
+    p.add_argument('--window-start', help='UTC YYYY-MM-DDTHH:MM:SSZ')
+    p.add_argument('--window-end', help='UTC YYYY-MM-DDTHH:MM:SSZ')
+    p.add_argument('--terminate-stale', action='store_true')
+    p.add_argument('--term-timeout', type=int, default=60)
+    p.add_argument('--report-prefix', help='explicit output path; creates .json and .txt')
+    p.add_argument('--json', action='store_true',
+                   help='print full machine-readable JSON instead of the human summary')
+    p.add_argument('--security-scan', action='store_true',
+                   help='scan recent web files and persistence locations for compromise indicators')
+    p.add_argument('--days', type=int, default=7,
+                   help='security scan lookback window in days (default: 7)')
+    p.add_argument('--since', help='security scan start date YYYY-MM-DD; scans from that date through now')
+    p.add_argument('--deep', action='store_true',
+                   help='security scan all supported web files, ignoring modification time')
+    p.add_argument('--interactive', action='store_true',
+                   help='review findings and optionally quarantine files interactively')
+    return p
+
+
+
+def human_summary(report):
+    lines = ['CyberPanel PHP Security Updater', '']
+
+    if report.get('status') != 'ok':
+        lines.append('[FAILED] Check could not be completed.')
+        error = report.get('error')
+        if error:
+            lines.append('Reason: {}'.format(error))
+        lines.append('')
+        if report.get('mode') == 'check':
+            lines.append('No changes were made.')
+        else:
+            if report.get('transaction_completed'):
+                lines.append('The package transaction completed, but post-validation failed.')
+                lines.append('Review the detailed report before taking further action.')
+            else:
+                lines.append('No package transaction was completed.')
+        lines.append('')
+        lines.append('For technical details run again with --json.')
+        return '\n'.join(lines)
+
+    lines.append('[OK] OpenLiteSpeed is running.')
+
+    configured = report.get('configured_php', [])
+    versions_before = report.get('php_before', {})
+    if configured:
+        lines.append('')
+        lines.append('PHP used by configured sites:')
+        for binary in configured:
+            version = versions_before.get(binary, 'unknown')
+            lines.append('  {}  ({})'.format(version, binary))
+    else:
+        lines.append('')
+        lines.append('[WARN] No absolute PHP handler was found in standard OLS configuration.')
+
+    sites = [
+        site for site in report.get('sites_before', [])
+        if site.get('handlers')
+    ]
+    lines.append('')
+    lines.append('Detected sites with resolved PHP handlers: {}'.format(len(sites)))
+    for site in sites:
+        lines.append('  - {}'.format(site.get('site', 'unknown')))
+
+    preview = report.get('preview', [])
+    lines.append('')
+    if preview:
+        lines.append('Available LSPHP package upgrades: {}'.format(len(preview)))
+        branches = {}
+        for item in preview:
+            match = re.match(r'lsphp([0-9]{2,3})', item.get('name', ''))
+            if match:
+                branches[match.group(1)] = branches.get(match.group(1), 0) + 1
+        if branches:
+            lines.append('Upgrade candidates by PHP branch:')
+            for branch in sorted(branches):
+                label = '{}.{}'.format(branch[0], branch[1:]) if len(branch) == 2 else branch
+                lines.append('  PHP {}: {} packages'.format(label, branches[branch]))
+    else:
+        lines.append('[OK] No LSPHP package upgrades are present in the current transaction preview.')
+
+    warnings = report.get('warnings', [])
+    if warnings:
+        lines.append('')
+        lines.append('Warnings:')
+        for warning in warnings:
+            lines.append('  - {}'.format(warning))
+
+    lines.append('')
+    if report.get('mode') == 'check':
+        lines.append('No changes were made.')
+        if preview:
+            lines.append('To review the full technical result:')
+            lines.append('  sudo bash bin/php-security-update --json')
+    else:
+        lines.append('[OK] Update workflow completed.')
+        lines.append('Verify each website through its real HTTPS path before restoring traffic.')
+
+    return '\n'.join(lines)
+
+
+
+def main(argv=None):
+    p = parser()
+    args = p.parse_args(argv)
+    if args.security_scan:
+        if args.apply or args.manual or args.terminate_stale:
+            p.error('--security-scan cannot be combined with package mutation modes')
+        from security_scan import run_security_scan
+        try:
+            run_security_scan(days=args.days, deep=args.deep,
+                              interactive=args.interactive, json_output=args.json,
+                              since=args.since)
+            return 0
+        except (Exception, KeyboardInterrupt) as exc:
+            if args.json:
+                print(json.dumps({'schema': 1, 'mode': 'security-scan', 'status': 'failed',
+                                  'error': str(exc)}, indent=2, sort_keys=True))
+            else:
+                print('CyberPanel Security Scan\n\n[FAILED] {}'.format(exc))
+            return 2
+    if args.deep or args.interactive or args.days != 7 or args.since:
+        p.error('--days/--since/--deep/--interactive require --security-scan')
+    if args.manual and args.apply:
+        p.error('--manual is read-only and cannot be combined with --apply')
+    if args.apply and not all((args.approve, args.backup, args.backup_sha256,
+                               args.restore_tested, args.window_start, args.window_end)):
+        p.error('--apply requires approval, backup + SHA256, restore attestation and maintenance window')
+    if args.terminate_stale and not args.apply:
+        p.error('--terminate-stale requires --apply')
+    if not 1 <= args.term_timeout <= 3600:
+        p.error('--term-timeout must be 1..3600')
+    if args.report_prefix and any(os.path.lexists(args.report_prefix + suffix) for suffix in ('.json', '.txt')):
+        p.error('Report files already exist; choose a fresh prefix')
+    report = dict(schema=1, mode='apply' if args.apply else 'check', status='failed',
+                  time=dt.datetime.now(dt.timezone.utc).isoformat())
+    lock = None
+    scratch = None
+    try:
+        scratch = tempfile.TemporaryDirectory(prefix='lsphp-check-')
+        args.scratch = scratch.name
+        if args.apply:
+            window(args.window_start, args.window_end)
+            backup_check(args.backup, args.backup_sha256)
+            import fcntl
+            lock = open('/run/lock/cyberpanel-php-security-updater.lock', 'a')
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        execute(args, report)
+        report['status'] = 'ok'
+    except (Exception, KeyboardInterrupt) as exc:
+        report['error'] = str(exc)
+    finally:
+        if lock:
+            lock.close()
+        if scratch is not None:
+            scratch.cleanup()
+    encoded = json.dumps(report, indent=2, sort_keys=True)
+    text = '\n'.join('{}: {}'.format(k, json.dumps(v, sort_keys=True)) for k, v in sorted(report.items())) + '\n'
+    if args.json:
+        print(encoded)
+    else:
+        print(human_summary(report))
+    if args.report_prefix:
+        created = []
+        try:
+            for suffix, content in (('.json', encoded + '\n'), ('.txt', text)):
+                path = args.report_prefix + suffix
+
+                # Never overwrite existing reports or symlinks.
+                fd = os.open(
+                    path,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o600
+                )
+                created.append(path)
+
+                with os.fdopen(fd, 'w') as stream:
+                    stream.write(content)
+
+        except OSError:
+            # Remove only files created by this invocation.
+            for path in reversed(created):
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+            raise
+    return 0 if report['status'] == 'ok' else 2
+
+
+if __name__ == '__main__':
+    sys.exit(main())
+, binary)
+        if match:
+            branches.add(match.group(1))
+    if not branches:
+        raise RuntimeError('No configured or running LSPHP branch detected')
+    report['target_php_branches'] = sorted(branches)
+    selected = [
+        p for p in installed
+        if any(re.match(r'^lsphp{}(?:-|$)'.format(re.escape(branch)), p.name)
+               for branch in branches)
+    ]
+    if not selected:
+        raise RuntimeError('No installed packages found for active LSPHP branches')
+    return selected
+
+
 def manual_commands(installed, report):
     names = ' '.join(sorted(set(p.name for p in installed)))
     if report['backend'] == 'apt':
