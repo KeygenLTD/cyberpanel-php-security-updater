@@ -71,7 +71,7 @@ def read_text_limited(path, max_bytes=MAX_FILE_BYTES):
 def classify_file(path, text):
     reasons = []
     score = 0
-    lower_path = str(path).lower()
+    lower_path = str(path).replace('\\\\', '/').lower()
     suffix = path.suffix.lower()
 
     if KNOWN_SHELL_NAMES.search(path.name):
