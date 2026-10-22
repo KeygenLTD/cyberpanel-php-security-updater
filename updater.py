@@ -305,6 +305,14 @@ def parser():
     p.add_argument('--report-prefix', help='explicit output path; creates .json and .txt')
     p.add_argument('--json', action='store_true',
                    help='print full machine-readable JSON instead of the human summary')
+    p.add_argument('--security-scan', action='store_true',
+                   help='scan recent web files and persistence locations for compromise indicators')
+    p.add_argument('--days', type=int, default=7,
+                   help='security scan lookback window in days (default: 7)')
+    p.add_argument('--deep', action='store_true',
+                   help='security scan all supported web files, ignoring modification time')
+    p.add_argument('--interactive', action='store_true',
+                   help='review findings and optionally quarantine files interactively')
     return p
 
 
@@ -394,6 +402,23 @@ def human_summary(report):
 def main(argv=None):
     p = parser()
     args = p.parse_args(argv)
+    if args.security_scan:
+        if args.apply or args.manual or args.terminate_stale:
+            p.error('--security-scan cannot be combined with package mutation modes')
+        from security_scan import run_security_scan
+        try:
+            run_security_scan(days=args.days, deep=args.deep,
+                              interactive=args.interactive, json_output=args.json)
+            return 0
+        except (Exception, KeyboardInterrupt) as exc:
+            if args.json:
+                print(json.dumps({'schema': 1, 'mode': 'security-scan', 'status': 'failed',
+                                  'error': str(exc)}, indent=2, sort_keys=True))
+            else:
+                print('CyberPanel Security Scan\n\n[FAILED] {}'.format(exc))
+            return 2
+    if args.deep or args.interactive or args.days != 7:
+        p.error('--days/--deep/--interactive require --security-scan')
     if args.manual and args.apply:
         p.error('--manual is read-only and cannot be combined with --apply')
     if args.apply and not all((args.approve, args.backup, args.backup_sha256,
