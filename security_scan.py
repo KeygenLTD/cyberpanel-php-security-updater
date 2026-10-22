@@ -243,6 +243,10 @@ def scan(days=7, deep=False, roots=None, progress=None):
                 'modified': dt.datetime.fromtimestamp(st.st_mtime, dt.timezone.utc).isoformat(),
                 'truncated_analysis': truncated,
             })
+            if progress:
+                progress('finding', root=str(root), index=root_index, total=total_roots,
+                         inspected=inspected, root_inspected=root_inspected,
+                         finding=findings[-1], findings=len(findings))
         if progress:
             progress('root_done', root=str(root), index=root_index, total=total_roots,
                      inspected=inspected, root_inspected=root_inspected,
