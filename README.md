@@ -16,7 +16,7 @@ The one-command workflow performs three guarded phases:
 
 1. Scans website files changed/created since **2026-10-10** through the current time for web-shell and compromise indicators.
 2. Shows HIGH/CRITICAL findings for interactive review, then shows the PHP package transaction preview and websites using PHP branches that will be affected. The operator may quarantine, inspect, stop, or explicitly continue.
-3. After the operator answers the backup and update confirmation questions with `y`, updates **all installed LSPHP branches** using the strict transaction policy, then performs post-update checks.
+3. After the operator answers the backup and update confirmation questions, the tool updates **all installed LSPHP branches** using the strict transaction policy, then performs post-update checks. If no restorable backup is confirmed, it asks a second explicit [y/N] question before allowing the operator to continue without one.
 
 No file is automatically deleted. LOW/MEDIUM scan findings are reported but do not automatically block PHP package updates.
 
