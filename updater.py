@@ -309,6 +309,7 @@ def parser():
                    help='scan recent web files and persistence locations for compromise indicators')
     p.add_argument('--days', type=int, default=7,
                    help='security scan lookback window in days (default: 7)')
+    p.add_argument('--since', help='security scan start date YYYY-MM-DD; scans from that date through now')
     p.add_argument('--deep', action='store_true',
                    help='security scan all supported web files, ignoring modification time')
     p.add_argument('--interactive', action='store_true',
@@ -408,7 +409,8 @@ def main(argv=None):
         from security_scan import run_security_scan
         try:
             run_security_scan(days=args.days, deep=args.deep,
-                              interactive=args.interactive, json_output=args.json)
+                              interactive=args.interactive, json_output=args.json,
+                              since=args.since)
             return 0
         except (Exception, KeyboardInterrupt) as exc:
             if args.json:
@@ -417,8 +419,8 @@ def main(argv=None):
             else:
                 print('CyberPanel Security Scan\n\n[FAILED] {}'.format(exc))
             return 2
-    if args.deep or args.interactive or args.days != 7:
-        p.error('--days/--deep/--interactive require --security-scan')
+    if args.deep or args.interactive or args.days != 7 or args.since:
+        p.error('--days/--since/--deep/--interactive require --security-scan')
     if args.manual and args.apply:
         p.error('--manual is read-only and cannot be combined with --apply')
     if args.apply and not all((args.approve, args.backup, args.backup_sha256,

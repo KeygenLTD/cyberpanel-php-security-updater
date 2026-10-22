@@ -132,7 +132,11 @@ def iter_recent_files(roots, cutoff, deep=False):
                     continue
                 if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
                     continue
-                if not deep and st.st_mtime < cutoff:
+                birth = getattr(st, 'st_birthtime', None)
+                relevant_times = [st.st_mtime, st.st_ctime]
+                if birth is not None:
+                    relevant_times.append(birth)
+                if not deep and max(relevant_times) < cutoff:
                     continue
                 key = (st.st_dev, st.st_ino)
                 if key in seen:
@@ -141,8 +145,7 @@ def iter_recent_files(roots, cutoff, deep=False):
                 yield path, st
 
 
-def suspicious_persistence(days):
-    cutoff = dt.datetime.now(dt.timezone.utc).timestamp() - (days * 86400)
+def suspicious_persistence(cutoff):
     candidates = []
     paths = [Path('/etc/crontab'), Path('/etc/cron.d'), Path('/var/spool/cron'), Path('/etc/systemd/system'),
              Path('/tmp'), Path('/var/tmp'), Path('/dev/shm')]
@@ -195,44 +198,77 @@ def related_log_hits(finding, limit=20):
     return hits
 
 
-def scan(days=7, deep=False, roots=None):
+def scan(days=7, deep=False, roots=None, progress=None, since=None):
     if os.geteuid() != 0:
         raise RuntimeError('Root required for complete security scan')
     roots = [Path(p) for p in (roots or discover_web_roots())]
-    cutoff = dt.datetime.now(dt.timezone.utc).timestamp() - (days * 86400)
+    now = dt.datetime.now(dt.timezone.utc)
+    if since:
+        start = dt.datetime.strptime(since, '%Y-%m-%d').replace(tzinfo=dt.timezone.utc)
+        if start > now:
+            raise RuntimeError('--since cannot be in the future')
+        cutoff = start.timestamp()
+    else:
+        cutoff = now.timestamp() - (days * 86400)
+        start = dt.datetime.fromtimestamp(cutoff, dt.timezone.utc)
     findings = []
     inspected = 0
-    for path, st in iter_recent_files(roots, cutoff, deep=deep):
-        inspected += 1
-        if st.st_size > MAX_FILE_BYTES:
-            continue
-        suffix = path.suffix.lower()
-        try:
-            if suffix not in TEXT_EXTENSIONS and path.name != '.htaccess':
-                with path.open('rb') as probe:
-                    head = probe.read(min(st.st_size, 128 * 1024))
-                if b'<?php' not in head.lower() and b'<?= ' not in head.lower() and b'<?=' not in head.lower():
-                    continue
-            text, truncated = read_text_limited(path)
-        except OSError:
-            continue
-        score, severity, reasons = classify_file(path, text)
-        if not score:
-            continue
-        findings.append({
-            'path': str(path),
-            'score': score,
-            'severity': severity,
-            'reasons': reasons,
-            'sha256': sha256_file(path),
-            'size': st.st_size,
-            'owner': owner_name(st.st_uid),
-            'uid': st.st_uid,
-            'mode': oct(stat.S_IMODE(st.st_mode)),
-            'modified': dt.datetime.fromtimestamp(st.st_mtime, dt.timezone.utc).isoformat(),
-            'truncated_analysis': truncated,
-        })
+    total_roots = len(roots)
+    for root_index, root in enumerate(roots, 1):
+        root_inspected = 0
+        if progress:
+            progress('root_start', root=str(root), index=root_index, total=total_roots,
+                     inspected=inspected, findings=len(findings))
+        for path, st in iter_recent_files([root], cutoff, deep=deep):
+            inspected += 1
+            root_inspected += 1
+            if progress and (root_inspected == 1 or root_inspected % 500 == 0):
+                progress('progress', root=str(root), index=root_index, total=total_roots,
+                         inspected=inspected, root_inspected=root_inspected,
+                         findings=len(findings))
+            if st.st_size > MAX_FILE_BYTES:
+                continue
+            suffix = path.suffix.lower()
+            try:
+                if suffix not in TEXT_EXTENSIONS and path.name != '.htaccess':
+                    with path.open('rb') as probe:
+                        head = probe.read(min(st.st_size, 128 * 1024))
+                    if b'<?php' not in head.lower() and b'<?= ' not in head.lower() and b'<?=' not in head.lower():
+                        continue
+                text, truncated = read_text_limited(path)
+            except OSError:
+                continue
+            score, severity, reasons = classify_file(path, text)
+            if not score:
+                continue
+            findings.append({
+                'path': str(path),
+                'score': score,
+                'severity': severity,
+                'reasons': reasons,
+                'sha256': sha256_file(path),
+                'size': st.st_size,
+                'owner': owner_name(st.st_uid),
+                'uid': st.st_uid,
+                'mode': oct(stat.S_IMODE(st.st_mode)),
+                'modified': dt.datetime.fromtimestamp(st.st_mtime, dt.timezone.utc).isoformat(),
+                'truncated_analysis': truncated,
+            })
+            if progress:
+                progress('finding', root=str(root), index=root_index, total=total_roots,
+                         inspected=inspected, root_inspected=root_inspected,
+                         finding=findings[-1], findings=len(findings))
+        if progress:
+            progress('root_done', root=str(root), index=root_index, total=total_roots,
+                     inspected=inspected, root_inspected=root_inspected,
+                     findings=len(findings))
     findings.sort(key=lambda x: (-x['score'], x['path']))
+    if progress:
+        progress('persistence_start', inspected=inspected, findings=len(findings))
+    persistence = suspicious_persistence(cutoff)
+    if progress:
+        progress('persistence_done', inspected=inspected, findings=len(findings),
+                 persistence=len(persistence))
     high = [f for f in findings if f['score'] >= 55]
     compromise = 'HIGH CONFIDENCE' if any(f['score'] >= 80 and len(f['reasons']) >= 2 for f in findings) else (
         'SUSPICIOUS' if high else 'NO KNOWN INDICATORS FOUND'
@@ -240,12 +276,14 @@ def scan(days=7, deep=False, roots=None):
     return {
         'schema': 1,
         'mode': 'security-scan',
-        'days': days,
+        'days': None if since else days,
+        'since': start.isoformat(),
+        'scan_until': now.isoformat(),
         'deep': deep,
         'roots': [str(p) for p in roots],
         'files_inspected': inspected,
         'findings': findings,
-        'persistence_findings': suspicious_persistence(days),
+        'persistence_findings': persistence,
         'evidence_of_compromise': compromise,
         'time': dt.datetime.now(dt.timezone.utc).isoformat(),
     }
@@ -361,10 +399,35 @@ def interactive_review(report):
                 print('Unknown choice.')
 
 
-def run_security_scan(days=7, deep=False, interactive=False, json_output=False):
+def live_progress(event, **data):
+    if event == 'root_start':
+        print('[{}/{}] Scanning {}'.format(data['index'], data['total'], data['root']), flush=True)
+    elif event == 'progress':
+        print('  Files checked: {}  |  this site: {}  |  findings: {}'.format(
+            data['inspected'], data['root_inspected'], data['findings']), flush=True)
+    elif event == 'finding':
+        finding = data['finding']
+        print('  [{}] {}  score={}/100'.format(
+            finding['severity'], finding['path'], finding['score']), flush=True)
+    elif event == 'root_done':
+        print('  Done: {} files on this site, {} total finding(s)'.format(
+            data['root_inspected'], data['findings']), flush=True)
+    elif event == 'persistence_start':
+        print('Checking persistence locations: cron, systemd, /tmp, /var/tmp, /dev/shm', flush=True)
+    elif event == 'persistence_done':
+        print('Persistence check complete: {} indicator(s)'.format(data['persistence']), flush=True)
+
+
+def run_security_scan(days=7, deep=False, interactive=False, json_output=False, since=None):
     if days < 1 or days > 3650:
         raise RuntimeError('--days must be 1..3650')
-    report = scan(days=days, deep=deep)
+    progress = None if json_output else live_progress
+    if not json_output:
+        print('CyberPanel Security Scan')
+        print('Live progress enabled.\n')
+    if not json_output and since:
+        print('Scan window: {} -> now'.format(since))
+    report = scan(days=days, deep=deep, progress=progress, since=since)
     if json_output:
         print(json.dumps(report, indent=2, sort_keys=True))
     else:
