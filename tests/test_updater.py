@@ -160,6 +160,12 @@ class PolicyTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'Running PHP process is not managed'):
                 u.inventory_report(installed, report)
 
+    def test_required_lsphp_repo_policy(self):
+        self.assertTrue(u.required_lsphp_repo('litespeed'))
+        self.assertTrue(u.required_lsphp_repo('litespeed-update'))
+        self.assertFalse(u.required_lsphp_repo('gf'))
+        self.assertFalse(u.required_lsphp_repo('epel'))
+
     def test_manual_commands_do_not_execute(self):
         report = {'backend': 'apt', 'installed': ['lsphp82:amd64=8.2.34'], 'warnings': []}
         with patch.object(u, 'run') as run:
