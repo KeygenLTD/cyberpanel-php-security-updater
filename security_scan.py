@@ -29,6 +29,7 @@ LONG_ENCODED = re.compile(r'[A-Za-z0-9+/]{300,}={0,2}')
 JS_CREDENTIAL_ACCESS = re.compile(r'(?i)(?:document\.cookie|localStorage|sessionStorage)')
 JS_SUSPICIOUS_SINK = re.compile(r'(?i)(?:fetch\s*\(|XMLHttpRequest|navigator\.sendBeacon|new\s+WebSocket\s*\()')
 LITESPEED_JS_CACHE = re.compile(r'(?i)/wp-content/litespeed/js/[a-f0-9]{16,}\.js$')
+LITESPEED_CACHE_PATH = re.compile(r'(?i)(?:^|/)wp-content/litespeed(?:/|$)')
 PERSISTENCE_TOKENS = re.compile(r'(?i)(curl|wget|bash\s+-c|python\s+-c|perl\s+-e|php\s+-r|nc\s|ncat|socat|/dev/tcp/)')
 
 MAX_FILE_BYTES = 8 * 1024 * 1024
@@ -136,7 +137,11 @@ def iter_recent_files(roots, cutoff, deep=False):
     seen = set()
     for root in roots:
         for current, dirs, files in os.walk(str(root), followlinks=False):
-            dirs[:] = [d for d in dirs if d not in {'.git', 'node_modules', 'vendor'}]
+            if LITESPEED_CACHE_PATH.search(Path(current).as_posix().replace('\\', '/')):
+                dirs[:] = []
+                continue
+            dirs[:] = [d for d in dirs if d not in {'.git', 'node_modules', 'vendor'}
+                       and not LITESPEED_CACHE_PATH.search((Path(current) / d).as_posix().replace('\\', '/'))]
             for name in files:
                 path = Path(current) / name
                 try:
