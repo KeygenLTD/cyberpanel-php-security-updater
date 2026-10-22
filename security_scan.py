@@ -382,10 +382,33 @@ def interactive_review(report):
                 print('Unknown choice.')
 
 
+def live_progress(event, **data):
+    if event == 'root_start':
+        print('[{}/{}] Scanning {}'.format(data['index'], data['total'], data['root']), flush=True)
+    elif event == 'progress':
+        print('  Files checked: {}  |  this site: {}  |  findings: {}'.format(
+            data['inspected'], data['root_inspected'], data['findings']), flush=True)
+    elif event == 'finding':
+        finding = data['finding']
+        print('  [{}] {}  score={}/100'.format(
+            finding['severity'], finding['path'], finding['score']), flush=True)
+    elif event == 'root_done':
+        print('  Done: {} files on this site, {} total finding(s)'.format(
+            data['root_inspected'], data['findings']), flush=True)
+    elif event == 'persistence_start':
+        print('Checking persistence locations: cron, systemd, /tmp, /var/tmp, /dev/shm', flush=True)
+    elif event == 'persistence_done':
+        print('Persistence check complete: {} indicator(s)'.format(data['persistence']), flush=True)
+
+
 def run_security_scan(days=7, deep=False, interactive=False, json_output=False):
     if days < 1 or days > 3650:
         raise RuntimeError('--days must be 1..3650')
-    report = scan(days=days, deep=deep)
+    progress = None if json_output else live_progress
+    if not json_output:
+        print('CyberPanel Security Scan')
+        print('Live progress enabled.\n')
+    report = scan(days=days, deep=deep, progress=progress)
     if json_output:
         print(json.dumps(report, indent=2, sort_keys=True))
     else:
