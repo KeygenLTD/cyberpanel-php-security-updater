@@ -460,12 +460,16 @@ def secure_update_flow(args):
     scan_report = run_security_scan(days=args.days, deep=False, interactive=False, json_output=False, since=since)
     severe = [f for f in scan_report.get('findings', []) if f.get('score', 0) >= 55]
     if severe:
+        from security_scan import interactive_review
         print('')
-        print('[BLOCKED] HIGH/CRITICAL security findings detected: {}'.format(len(severe)))
-        for finding in severe:
-            print('  [{}] {}  score={}/100'.format(finding.get('severity'), finding.get('path'), finding.get('score')))
-        print('Review/quarantine these findings before package update.')
-        return 2
+        print('[WARNING] HIGH/CRITICAL security findings detected: {}'.format(len(severe)))
+        review_report = dict(scan_report)
+        review_report['findings'] = severe
+        interactive_review(review_report)
+        proceed = input('Type CONTINUE to proceed to PHP update preview, or anything else to stop: ').strip()
+        if proceed != 'CONTINUE':
+            print('Stopped after security review; no packages were changed.')
+            return 2
 
     scratch = tempfile.TemporaryDirectory(prefix='lsphp-secure-update-')
     lock = None
