@@ -114,7 +114,11 @@ def versions(packages):
     for name in sorted(set(re.match(r'lsphp([0-9]+)', p.name).group(1)
                            for p in packages)):
         binary = '/usr/local/lsws/lsphp{}/bin/lsphp'.format(name)
-        result[binary] = run([binary, '-n', '-r', 'echo PHP_VERSION;'])
+        output = run([binary, '-v'])
+        match = re.search(r'^PHP\s+(\d+\.\d+\.\d+)\b', output, re.MULTILINE)
+        if not match:
+            raise RuntimeError('Cannot determine PHP version for {}'.format(binary))
+        result[binary] = match.group(1)
     return result
 
 

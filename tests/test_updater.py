@@ -25,6 +25,22 @@ class Package:
 
 
 class PolicyTests(unittest.TestCase):
+    def test_lsphp_version_detection(self):
+        php_output = (
+            'PHP 8.4.25 (litespeed) (built: Aug 25 2026)\n'
+            'Copyright (c) The PHP Group\n'
+        )
+        with patch.object(u, 'run', return_value=php_output) as mocked_run:
+            result = u.versions([Package('lsphp84')])
+
+        binary = '/usr/local/lsws/lsphp84/bin/lsphp'
+        self.assertEqual(result[binary], '8.4.25')
+        mocked_run.assert_called_once_with([binary, '-v'])
+
+    def test_lsphp_rejects_help_instead_of_version(self):
+        with patch.object(u, 'run', return_value='Usage: lsphp\n'):
+            with self.assertRaises(RuntimeError):
+                u.versions([Package('lsphp84')])
     def validate(self, old, new, removed):
         return u.validate_transaction(old, new, removed,
                                       lambda a, b: int(a.version) - int(b.version))
