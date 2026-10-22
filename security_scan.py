@@ -5,7 +5,10 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import pwd
+try:
+    import pwd
+except ImportError:  # Windows unit-test compatibility; production target is Linux.
+    pwd = None
 import re
 import shutil
 import stat
@@ -38,6 +41,8 @@ def sha256_file(path):
 
 
 def owner_name(uid):
+    if pwd is None:
+        return str(uid)
     try:
         return pwd.getpwuid(uid).pw_name
     except KeyError:
