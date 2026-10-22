@@ -254,15 +254,19 @@ def execute(args, report):
             print(json.dumps({'transaction_preview': report['preview']}, indent=2), flush=True)
         if not args.apply:
             return
-        report['backup'] = backup_check(args.backup, args.backup_sha256)
-        window(args.window_start, args.window_end)
+        if args.secure_update:
+            report['backup'] = {'operator_attested': True}
+        else:
+            report['backup'] = backup_check(args.backup, args.backup_sha256)
+            window(args.window_start, args.window_end)
         if incoming:
             base.download_packages(incoming)
             for pkg in incoming:
                 code, message = base.package_signature_check(pkg)
                 if code != 0:
                     raise RuntimeError('RPM signature check failed: ' + message)
-            window(args.window_start, args.window_end)
+            if not args.secure_update:
+                window(args.window_start, args.window_end)
             report['transaction_started'] = True
             base.do_transaction()
             report['transaction_completed'] = True
@@ -272,6 +276,11 @@ def execute(args, report):
                               pkg.name + '.' + pkg.arch])
                 if actual != '{}:{}-{}'.format(pkg.epoch, pkg.version, pkg.release):
                     raise RuntimeError('Post-transaction RPM verification failed')
+            if args.secure_update:
+                marker = Path('/usr/local/lsws/admin/tmp/.lsphp_restart.txt')
+                marker.parent.mkdir(parents=True, exist_ok=True)
+                marker.touch()
+                report['php_restart_marker'] = str(marker)
         report['php_after'] = versions(installed)
     postflight(args, report)
 
@@ -283,8 +292,14 @@ def postflight(args, report):
     from site_audit import audit_sites
     report['sites_after'] = audit_sites(report['php_after'], report['processes_after'])
     report['ols_after'] = run(['systemctl', 'is-active', 'lsws'])
-    if report['ols_after'] != 'active' or any(p['deleted'] for p in report['processes_after']):
-        raise RuntimeError('Post-check incomplete: OLS inactive or stale PHP workers remain')
+    if report['ols_after'] != 'active':
+        raise RuntimeError('Post-check incomplete: OpenLiteSpeed is inactive')
+    stale = [p for p in report['processes_after'] if p['deleted']]
+    if stale:
+        if args.secure_update:
+            report['warnings'].append('Stale PHP workers remain; OpenLiteSpeed restart marker was written and workers should recycle on subsequent requests.')
+        else:
+            raise RuntimeError('Post-check incomplete: stale PHP workers remain')
     report['warnings'].append('CLI and service checks passed; verify each website through its real HTTP path.')
 
 
@@ -553,46 +568,52 @@ def secure_update_flow(args):
         print('Review/quarantine these findings before package update.')
         return 2
 
-    print('')
-    print('=== Phase 2/3: PHP update preview ===')
-    original_apply = args.apply
-    args.apply = False
-    preview_report = dict(schema=1, mode='check', status='failed',
-                          time=dt.datetime.now(dt.timezone.utc).isoformat())
-    execute(args, preview_report)
-    preview_report['status'] = 'ok'
-    update_impact_summary(preview_report)
-
-    if not preview_report.get('preview'):
+    scratch = tempfile.TemporaryDirectory(prefix='lsphp-secure-update-')
+    lock = None
+    try:
+        args.scratch = scratch.name
         print('')
-        print('[OK] No LSPHP package upgrades are currently available.')
-        args.apply = original_apply
+        print('=== Phase 2/3: PHP update preview ===')
+        args.apply = False
+        preview_report = dict(schema=1, mode='check', status='failed',
+                              time=dt.datetime.now(dt.timezone.utc).isoformat())
+        execute(args, preview_report)
+        preview_report['status'] = 'ok'
+        update_impact_summary(preview_report)
+
+        if not preview_report.get('preview'):
+            print('')
+            print('[OK] No LSPHP package upgrades are currently available.')
+            return 0
+
+        print('')
+        backup = input('Confirm a current restorable backup/snapshot exists. Type BACKUP READY: ').strip()
+        if backup != 'BACKUP READY':
+            print('Update cancelled; no packages were changed.')
+            return 2
+
+        confirm = input('Type UPDATE to install all listed LSPHP upgrades: ').strip()
+        if confirm != 'UPDATE':
+            print('Update cancelled; no packages were changed.')
+            return 2
+
+        print('')
+        print('=== Phase 3/3: Applying PHP updates ===')
+        import fcntl
+        lock = open('/run/lock/cyberpanel-php-security-updater.lock', 'a')
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+        args.apply = True
+        apply_report = dict(schema=1, mode='secure-update', status='failed',
+                            time=dt.datetime.now(dt.timezone.utc).isoformat())
+        execute(args, apply_report)
+        apply_report['status'] = 'ok'
+        print(human_summary(apply_report))
         return 0
-
-    print('')
-    backup = input('Confirm a current restorable backup/snapshot exists. Type BACKUP READY: ').strip()
-    if backup != 'BACKUP READY':
-        print('Update cancelled; no packages were changed.')
-        args.apply = original_apply
-        return 2
-
-    confirm = input('Type UPDATE to install all listed LSPHP upgrades: ').strip()
-    if confirm != 'UPDATE':
-        print('Update cancelled; no packages were changed.')
-        args.apply = original_apply
-        return 2
-
-    print('')
-    print('=== Phase 3/3: Applying PHP updates ===')
-    args.apply = True
-    args.secure_update = True
-    apply_report = dict(schema=1, mode='secure-update', status='failed',
-                        time=dt.datetime.now(dt.timezone.utc).isoformat())
-    execute(args, apply_report)
-    apply_report['status'] = 'ok'
-    print(human_summary(apply_report))
-    args.apply = original_apply
-    return 0
+    finally:
+        if lock:
+            lock.close()
+        scratch.cleanup()
 
 
 def main(argv=None):
