@@ -454,7 +454,7 @@ def update_impact_summary(report):
         p.error('--days/--since/--deep/--interactive require --security-scan')
     if args.manual and args.apply:
         p.error('--manual is read-only and cannot be combined with --apply')
-    if args.apply and not args.secure_update and not all((args.approve, args.backup, args.backup_sha256,
+    if args.apply and not all((args.approve, args.backup, args.backup_sha256,
                                args.restore_tested, args.window_start, args.window_end)):
         p.error('--apply requires approval, backup + SHA256, restore attestation and maintenance window')
     if args.terminate_stale and not args.apply:
@@ -534,7 +534,10 @@ if __name__ == '__main__':
     print('PHP update impact')
     print('  Package upgrades: {}'.format(len(preview)))
     if branches:
-        print('  PHP branches: {}'.format(', '.join(sorted(branches))))
+        labels = []
+        for branch in sorted(branches):
+            labels.append('{}.{}'.format(branch[0], branch[1:]) if len(branch) == 2 else branch)
+        print('  PHP branches: {}'.format(', '.join(labels)))
     if affected:
         print('  Sites using PHP branches that will be updated:')
         for site, handlers in affected:
