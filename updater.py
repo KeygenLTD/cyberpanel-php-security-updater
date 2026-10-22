@@ -244,9 +244,9 @@ def execute(args, report):
         if base.conf.installroot != '/':
             raise RuntimeError('Custom DNF installroot is unsupported')
         if not args.apply:
-            # DNF's cache-only API still creates metadata locks; isolate those writes.
-            shutil.copytree(base.conf.cachedir, args.scratch + '/cache',
-                            ignore=shutil.ignore_patterns('packages', '*.rpm', '*.pid', '*.lock'))
+            # Preview must not depend on a complete pre-existing system DNF cache.
+            # Use isolated scratch directories so DNF may refresh repository
+            # metadata without modifying the system package state or cache.
             base.conf.cachedir = args.scratch + '/cache'
             base.conf.persistdir = args.scratch + '/persist'
             base.conf.logdir = args.scratch
@@ -254,7 +254,7 @@ def execute(args, report):
         if set(base.conf.tsflags) - {'nodocs'}:
             raise RuntimeError('Unsafe/custom DNF tsflags; refusing transaction')
         base.conf.plugins = False
-        base.conf.cacheonly = not args.apply
+        base.conf.cacheonly = False
         base.conf.logfilelevel = 0
         base.conf.debuglevel = 0
         base.conf.best = True
@@ -266,12 +266,10 @@ def execute(args, report):
         for repo in base.repos.iter_enabled():
             repo.skip_if_unavailable = False
             repo.gpgcheck = True
-            if args.apply:
-                repo.metadata_expire = 0
-        if args.apply:
-            base.fill_sack()
-        else:
-            base.fill_sack_from_repos_in_cache()
+            repo.metadata_expire = 0
+        # Both preview and apply resolve against fresh metadata. In preview mode
+        # all metadata/cache writes are redirected into args.scratch above.
+        base.fill_sack()
         installed = [p for p in base.sack.query().installed() if PACKAGE.fullmatch(p.name)]
         inventory_report(installed, report)
         if args.manual:
