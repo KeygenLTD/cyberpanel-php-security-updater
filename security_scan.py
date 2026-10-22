@@ -132,7 +132,11 @@ def iter_recent_files(roots, cutoff, deep=False):
                     continue
                 if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
                     continue
-                if not deep and st.st_mtime < cutoff:
+                birth = getattr(st, 'st_birthtime', None)
+                relevant_times = [st.st_mtime, st.st_ctime]
+                if birth is not None:
+                    relevant_times.append(birth)
+                if not deep and max(relevant_times) < cutoff:
                     continue
                 key = (st.st_dev, st.st_ino)
                 if key in seen:
@@ -141,8 +145,7 @@ def iter_recent_files(roots, cutoff, deep=False):
                 yield path, st
 
 
-def suspicious_persistence(days):
-    cutoff = dt.datetime.now(dt.timezone.utc).timestamp() - (days * 86400)
+def suspicious_persistence(cutoff):
     candidates = []
     paths = [Path('/etc/crontab'), Path('/etc/cron.d'), Path('/var/spool/cron'), Path('/etc/systemd/system'),
              Path('/tmp'), Path('/var/tmp'), Path('/dev/shm')]
@@ -195,11 +198,19 @@ def related_log_hits(finding, limit=20):
     return hits
 
 
-def scan(days=7, deep=False, roots=None, progress=None):
+def scan(days=7, deep=False, roots=None, progress=None, since=None):
     if os.geteuid() != 0:
         raise RuntimeError('Root required for complete security scan')
     roots = [Path(p) for p in (roots or discover_web_roots())]
-    cutoff = dt.datetime.now(dt.timezone.utc).timestamp() - (days * 86400)
+    now = dt.datetime.now(dt.timezone.utc)
+    if since:
+        start = dt.datetime.strptime(since, '%Y-%m-%d').replace(tzinfo=dt.timezone.utc)
+        if start > now:
+            raise RuntimeError('--since cannot be in the future')
+        cutoff = start.timestamp()
+    else:
+        cutoff = now.timestamp() - (days * 86400)
+        start = dt.datetime.fromtimestamp(cutoff, dt.timezone.utc)
     findings = []
     inspected = 0
     total_roots = len(roots)
@@ -254,7 +265,7 @@ def scan(days=7, deep=False, roots=None, progress=None):
     findings.sort(key=lambda x: (-x['score'], x['path']))
     if progress:
         progress('persistence_start', inspected=inspected, findings=len(findings))
-    persistence = suspicious_persistence(days)
+    persistence = suspicious_persistence(cutoff)
     if progress:
         progress('persistence_done', inspected=inspected, findings=len(findings),
                  persistence=len(persistence))
@@ -265,7 +276,9 @@ def scan(days=7, deep=False, roots=None, progress=None):
     return {
         'schema': 1,
         'mode': 'security-scan',
-        'days': days,
+        'days': None if since else days,
+        'since': start.isoformat(),
+        'scan_until': now.isoformat(),
         'deep': deep,
         'roots': [str(p) for p in roots],
         'files_inspected': inspected,
@@ -405,14 +418,16 @@ def live_progress(event, **data):
         print('Persistence check complete: {} indicator(s)'.format(data['persistence']), flush=True)
 
 
-def run_security_scan(days=7, deep=False, interactive=False, json_output=False):
+def run_security_scan(days=7, deep=False, interactive=False, json_output=False, since=None):
     if days < 1 or days > 3650:
         raise RuntimeError('--days must be 1..3650')
     progress = None if json_output else live_progress
     if not json_output:
         print('CyberPanel Security Scan')
         print('Live progress enabled.\n')
-    report = scan(days=days, deep=deep, progress=progress)
+    if not json_output and since:
+        print('Scan window: {} -> now'.format(since))
+    report = scan(days=days, deep=deep, progress=progress, since=since)
     if json_output:
         print(json.dumps(report, indent=2, sort_keys=True))
     else:
