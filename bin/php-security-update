@@ -1,6 +1,12 @@
 #!/bin/bash
 set -euo pipefail
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "$SOURCE" ]]; do
+    DIR="$(cd -P -- "$(dirname -- "$SOURCE")" && pwd)"
+    SOURCE="$(readlink "$SOURCE")"
+    [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR="$(cd -P -- "$(dirname -- "$SOURCE")" && pwd)"
 for interpreter in /usr/libexec/platform-python /usr/bin/python3; do
     if [[ -x "$interpreter" ]] && { "$interpreter" -c 'import dnf, rpm' 2>/dev/null || "$interpreter" -c 'import apt, apt_pkg' 2>/dev/null; }; then
         exec "$interpreter" "$SCRIPT_DIR/../updater.py" "$@"
