@@ -170,7 +170,7 @@ class PolicyTests(unittest.TestCase):
         self.assertIn('No changes were made.', text)
         self.assertNotIn('"status": "ok"', text)
 
-    def test_secure_update_blocks_when_scan_has_high_finding(self):
+    def test_secure_update_stops_when_user_declines_after_high_finding(self):
         args = u.parser().parse_args(['--secure-update'])
         scan_report = {
             'findings': [{
@@ -180,6 +180,8 @@ class PolicyTests(unittest.TestCase):
             }]
         }
         with patch('security_scan.run_security_scan', return_value=scan_report), \
+             patch('security_scan.interactive_review'), \
+             patch('builtins.input', return_value='STOP'), \
              patch.object(u, 'execute') as execute:
             result = u.secure_update_flow(args)
         self.assertEqual(result, 2)
