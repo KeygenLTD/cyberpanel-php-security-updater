@@ -172,10 +172,10 @@ class PolicyTests(unittest.TestCase):
             # Simulate failure when creating the second report file.
             original_open = u.os.open
 
-            def failing_open(path, flags, mode=0o777):
+            def failing_open(path, flags, mode=0o777, **kwargs):
                 if str(path).endswith('.txt'):
                     raise OSError('Simulated report write failure')
-                return original_open(path, flags, mode)
+                return original_open(path, flags, mode, **kwargs)
 
             with patch.object(u, 'execute'), \
                  patch.object(u.os, 'open', side_effect=failing_open), \
