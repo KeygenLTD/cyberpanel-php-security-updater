@@ -133,6 +133,43 @@ class PolicyTests(unittest.TestCase):
             self.assertEqual(json.loads(Path(prefix + '.json').read_text())['status'], 'ok')
             self.assertIn('mode: "check"', Path(prefix + '.txt').read_text())
 
+
+    def test_default_human_summary(self):
+        def fake(args, report):
+            report['ols_before'] = 'active'
+            report['configured_php'] = ['/usr/local/lsws/lsphp84/bin/lsphp']
+            report['php_before'] = {
+                '/usr/local/lsws/lsphp84/bin/lsphp': '8.4.25'
+            }
+            report['sites_before'] = [
+                {
+                    'site': 'example.com',
+                    'handlers': [{'binary': '/usr/local/lsws/lsphp84/bin/lsphp'}]
+                }
+            ]
+            report['preview'] = [
+                {
+                    'name': 'lsphp84',
+                    'arch': 'x86_64',
+                    'before': 'lsphp84-8.4.25-1.el9.x86_64',
+                    'after': 'lsphp84-8.4.27-1.el9.x86_64'
+                }
+            ]
+            report['warnings'] = []
+
+        with patch.object(u, 'execute', side_effect=fake), \
+             contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(u.main([]), 0)
+
+        text = out.getvalue()
+        self.assertIn('CyberPanel PHP Security Updater', text)
+        self.assertIn('[OK] OpenLiteSpeed is running.', text)
+        self.assertIn('8.4.25', text)
+        self.assertIn('example.com', text)
+        self.assertIn('Available LSPHP package upgrades: 1', text)
+        self.assertIn('No changes were made.', text)
+        self.assertNotIn('"status": "ok"', text)
+
     def test_cli_apply_without_gates_fails_before_execution(self):
         result = subprocess.run([sys.executable, 'updater.py', '--apply'],
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -142,7 +179,7 @@ class PolicyTests(unittest.TestCase):
 
     def test_failure_report(self):
         with patch.object(u, 'execute', side_effect=RuntimeError('blocked')), contextlib.redirect_stdout(io.StringIO()) as out:
-            self.assertEqual(u.main([]), 2)
+            self.assertEqual(u.main(['--json']), 2)
         self.assertEqual(json.loads(out.getvalue())['error'], 'blocked')
 
     def test_sigterm_only_targets_deleted_worker(self):
@@ -208,7 +245,7 @@ class PolicyTests(unittest.TestCase):
             'TemporaryDirectory',
             side_effect=OSError('Simulated disk full')
         ), contextlib.redirect_stdout(io.StringIO()) as out:
-            result = u.main([])
+            result = u.main(['--json'])
 
         self.assertEqual(result, 2)
         report = json.loads(out.getvalue())

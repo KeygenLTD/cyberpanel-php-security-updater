@@ -2,19 +2,60 @@
 
 Conservative, fail-closed LSPHP package updates for **AlmaLinux 8, 9 and 10 + CyberPanel + OpenLiteSpeed**. No remote script execution, broad `dnf upgrade`, automatic SIGKILL, PHP branch migration, firewall changes or automatic rollback.
 
-## Run
+## Quick start
 
-Clone and review a pinned revision, then one command runs the default check:
+For a normal CyberPanel server, start with these three commands:
 
 ```bash
+git clone https://github.com/KeygenLTD/cyberpanel-php-security-updater.git
+cd cyberpanel-php-security-updater
 sudo bash bin/php-security-update
-# Optional persistent JSON + text reports (prefix must not already exist):
-sudo bash bin/php-security-update --check --report-prefix /root/php-check-20261022
 ```
 
-Check reads RPM inventory, OLS identity/status, configured absolute PHP handlers and `/proc/PID/exe`, prints versions and a structured DNF transaction preview. DNF cache-only APIs create locks, so the tool copies metadata to a private temporary directory and isolates cache/persist/log writes there; temporary files are removed on exit. It does not refresh repositories, install packages, signal processes or change server configuration. Explicit report output writes only the requested files (0600). It requires root for reliable process visibility. Missing cache/repositories/bindings or unsupported systems fail closed, exit 2. Cache results are **not proof of current security coverage**. Refresh metadata separately under your normal operations procedure before checking.
+The default command is **read-only**. It checks the server, detects configured/running LSPHP versions, previews available LSPHP package upgrades, and makes **no changes**.
 
-Python bindings for **DNF4** and RPM must already exist. EL8 normally uses `/usr/libexec/platform-python` (3.6); EL9/EL10 use `/usr/bin/python3`. No automatic dependency installation. DNF5-only installations are refused. AlmaLinux versions outside 8/9/10 and non-AlmaLinux systems are intentionally unsupported by this release. Repository availability and signing trust must be established by the administrator; the tool never adds repositories or imports keys.
+Example output:
+
+```text
+CyberPanel PHP Security Updater
+
+[OK] OpenLiteSpeed is running.
+
+PHP used by configured sites:
+  8.4.25  (/usr/local/lsws/lsphp84/bin/lsphp)
+
+Detected sites with resolved PHP handlers: 1
+  - example.com
+
+Available LSPHP package upgrades: 25
+Upgrade candidates by PHP branch:
+  PHP 8.4: 25 packages
+
+No changes were made.
+```
+
+For full machine-readable output:
+
+```bash
+sudo bash bin/php-security-update --json
+```
+
+To also save persistent JSON and text reports:
+
+```bash
+sudo bash bin/php-security-update --check   --report-prefix /root/php-check-20261022
+```
+
+The check requires root for reliable process visibility. It does not install packages, signal processes, change server configuration, add repositories, or import signing keys.
+
+Supported platforms in this release:
+
+- AlmaLinux 8, 9 and 10
+- Ubuntu 22.04 and 24.04
+- CyberPanel
+- OpenLiteSpeed
+
+Required OS package-manager Python bindings must already exist. Unsupported or incomplete environments fail closed with exit code 2.
 
 ## Apply gates
 
@@ -45,7 +86,7 @@ Running and stale workers are discovered via `/proc/PID/exe`, not `ps` text. `(d
 
 After applying, the tool checks exact updated RPM EVRs, executes every discovered PHP binary with `-n` to read PHP_VERSION, checks `lsws` is active, and reports any stale workers. CLI versions and service status do **not** prove the PHP version served by each virtual host. Verify websites through their real HTTPS paths, application tests and monitoring before restoring traffic. PHP settings and extensions should be validated through those application tests. Config discovery covers standard `httpd_config.conf` and `conf/vhosts/*/*.conf` absolute handler paths; custom includes/relative handlers require manual review. No automatic rollback is attempted: DNF history undo is not a dependable backup strategy. On failure use the independently tested restore procedure.
 
-JSON is printed to stdout (alongside an explicit preview); requested `.json` is a single JSON document. `.txt` contains readable key/value sections. Exit 0 = requested checks passed under the stated limits; 2 = blocked/failed/incomplete. Reports include package versions and process IDs and should be kept private. Partial transactions are reported and must be investigated. Keep terminal output if persistent reports cannot be written.
+Human-readable output is printed by default. Use `--json` for the full machine-readable JSON document. Requested `.json` report files contain a single JSON document and `.txt` contains readable key/value sections. Exit 0 = requested checks passed under the stated limits; 2 = blocked/failed/incomplete. Reports include package versions and process IDs and should be kept private. Partial transactions are reported and must be investigated. Keep terminal output if persistent reports cannot be written.
 
 ## Validation
 

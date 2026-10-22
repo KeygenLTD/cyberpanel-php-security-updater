@@ -250,7 +250,8 @@ def execute(args, report):
         compare = lambda a, b: rpm.labelCompare((str(a.epoch), a.version, a.release),
                                                 (str(b.epoch), b.version, b.release))
         report['preview'] = validate_transaction(installed, incoming, outgoing, compare)
-        print(json.dumps({'transaction_preview': report['preview']}, indent=2), flush=True)
+        if args.json:
+            print(json.dumps({'transaction_preview': report['preview']}, indent=2), flush=True)
         if not args.apply:
             return
         report['backup'] = backup_check(args.backup, args.backup_sha256)
@@ -302,7 +303,92 @@ def parser():
     p.add_argument('--terminate-stale', action='store_true')
     p.add_argument('--term-timeout', type=int, default=60)
     p.add_argument('--report-prefix', help='explicit output path; creates .json and .txt')
+    p.add_argument('--json', action='store_true',
+                   help='print full machine-readable JSON instead of the human summary')
     return p
+
+
+
+def human_summary(report):
+    lines = ['CyberPanel PHP Security Updater', '']
+
+    if report.get('status') != 'ok':
+        lines.append('[FAILED] Check could not be completed.')
+        error = report.get('error')
+        if error:
+            lines.append('Reason: {}'.format(error))
+        lines.append('')
+        if report.get('mode') == 'check':
+            lines.append('No changes were made.')
+        else:
+            if report.get('transaction_completed'):
+                lines.append('The package transaction completed, but post-validation failed.')
+                lines.append('Review the detailed report before taking further action.')
+            else:
+                lines.append('No package transaction was completed.')
+        lines.append('')
+        lines.append('For technical details run again with --json.')
+        return '\n'.join(lines)
+
+    lines.append('[OK] OpenLiteSpeed is running.')
+
+    configured = report.get('configured_php', [])
+    versions_before = report.get('php_before', {})
+    if configured:
+        lines.append('')
+        lines.append('PHP used by configured sites:')
+        for binary in configured:
+            version = versions_before.get(binary, 'unknown')
+            lines.append('  {}  ({})'.format(version, binary))
+    else:
+        lines.append('')
+        lines.append('[WARN] No absolute PHP handler was found in standard OLS configuration.')
+
+    sites = [
+        site for site in report.get('sites_before', [])
+        if site.get('handlers')
+    ]
+    lines.append('')
+    lines.append('Detected sites with resolved PHP handlers: {}'.format(len(sites)))
+    for site in sites:
+        lines.append('  - {}'.format(site.get('site', 'unknown')))
+
+    preview = report.get('preview', [])
+    lines.append('')
+    if preview:
+        lines.append('Available LSPHP package upgrades: {}'.format(len(preview)))
+        branches = {}
+        for item in preview:
+            match = re.match(r'lsphp([0-9]{2,3})', item.get('name', ''))
+            if match:
+                branches[match.group(1)] = branches.get(match.group(1), 0) + 1
+        if branches:
+            lines.append('Upgrade candidates by PHP branch:')
+            for branch in sorted(branches):
+                label = '{}.{}'.format(branch[0], branch[1:]) if len(branch) == 2 else branch
+                lines.append('  PHP {}: {} packages'.format(label, branches[branch]))
+    else:
+        lines.append('[OK] No LSPHP package upgrades are present in the current transaction preview.')
+
+    warnings = report.get('warnings', [])
+    if warnings:
+        lines.append('')
+        lines.append('Warnings:')
+        for warning in warnings:
+            lines.append('  - {}'.format(warning))
+
+    lines.append('')
+    if report.get('mode') == 'check':
+        lines.append('No changes were made.')
+        if preview:
+            lines.append('To review the full technical result:')
+            lines.append('  sudo bash bin/php-security-update --json')
+    else:
+        lines.append('[OK] Update workflow completed.')
+        lines.append('Verify each website through its real HTTPS path before restoring traffic.')
+
+    return '\n'.join(lines)
+
 
 
 def main(argv=None):
@@ -343,7 +429,10 @@ def main(argv=None):
             scratch.cleanup()
     encoded = json.dumps(report, indent=2, sort_keys=True)
     text = '\n'.join('{}: {}'.format(k, json.dumps(v, sort_keys=True)) for k, v in sorted(report.items())) + '\n'
-    print(encoded)
+    if args.json:
+        print(encoded)
+    else:
+        print(human_summary(report))
     if args.report_prefix:
         created = []
         try:
