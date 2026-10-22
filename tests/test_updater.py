@@ -10,7 +10,7 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch, call
+from unittest.mock import patch, call, mock_open
 
 import updater as u
 
@@ -189,7 +189,10 @@ class PolicyTests(unittest.TestCase):
         args = u.parser().parse_args(['--secure-update'])
         clean_scan = {'findings': []}
 
+        apply_states = []
+
         def fake_execute(local_args, report):
+            apply_states.append(local_args.apply)
             report.update({
                 'preview': [{'name': 'lsphp84', 'arch': 'x86_64',
                              'before': 'lsphp84-1.x86_64', 'after': 'lsphp84-2.x86_64'}],
@@ -217,13 +220,12 @@ class PolicyTests(unittest.TestCase):
         with patch('security_scan.run_security_scan', return_value=clean_scan), \
              patch.object(u, 'execute', side_effect=fake_execute) as execute, \
              patch('builtins.input', side_effect=['BACKUP READY', 'UPDATE']), \
-             patch('fcntl.flock'), patch('builtins.open', unittest.mock.mock_open()):
+             patch('fcntl.flock'), patch('builtins.open', mock_open()):
             result = u.secure_update_flow(args)
 
         self.assertEqual(result, 0)
         self.assertEqual(execute.call_count, 2)
-        self.assertFalse(execute.call_args_list[0].args[0].apply)
-        self.assertTrue(execute.call_args_list[1].args[0].apply)
+        self.assertEqual(apply_states, [False, True])
 
     def test_cli_apply_without_gates_fails_before_execution(self):
         result = subprocess.run([sys.executable, 'updater.py', '--apply'],
