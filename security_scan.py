@@ -32,7 +32,8 @@ JS_CREDENTIAL_ACCESS = re.compile(r'(?i)(?:document\.cookie|localStorage|session
 JS_SUSPICIOUS_SINK = re.compile(r'(?i)(?:fetch\s*\(|XMLHttpRequest|navigator\.sendBeacon|new\s+WebSocket\s*\()')
 JS_REDIRECT = re.compile(r'(?i)(?:window\.)?location(?:\.href|\.replace|\.assign)?\s*(?:=|\()')
 JS_PAYMENT_TERMS = re.compile(r'(?i)(?:card(?:number)?|credit.?card|cvv|cvc|checkout|payment|billing)')
-LITESPEED_JS_CACHE = re.compile(r'(?i)/wp-content/litespeed/js/[a-f0-9]{16,}\\.js
+LITESPEED_JS_CACHE = re.compile(r'(?i)/wp-content/litespeed/js/[a-f0-9]{16,}\.js$')
+PERSISTENCE_TOKENS = re.compile(r'(?i)(curl|wget|bash\s+-c|python\s+-c|perl\s+-e|php\s+-r|nc\s|ncat|socat|/dev/tcp/)')
 
 MAX_FILE_BYTES = 8 * 1024 * 1024
 DEFAULT_QUARANTINE = Path('/var/lib/cyberpanel-php-security-updater/quarantine')
@@ -487,7 +488,6 @@ def run_security_scan(days=7, deep=False, interactive=False, json_output=False, 
         interactive_review(report)
     return report
 )
-PERSISTENCE_TOKENS = re.compile(r'(?i)(curl|wget|bash\s+-c|python\s+-c|perl\s+-e|php\s+-r|nc\s|ncat|socat|/dev/tcp/)')
 
 MAX_FILE_BYTES = 8 * 1024 * 1024
 DEFAULT_QUARANTINE = Path('/var/lib/cyberpanel-php-security-updater/quarantine')
@@ -897,7 +897,6 @@ def run_security_scan(days=7, deep=False, interactive=False, json_output=False, 
         interactive_review(report)
     return report
 )
-PERSISTENCE_TOKENS = re.compile(r'(?i)(curl|wget|bash\\s+-c|python\\s+-c|perl\\s+-e|php\\s+-r|nc\\s|ncat|socat|/dev/tcp/)')
 
 MAX_FILE_BYTES = 8 * 1024 * 1024
 DEFAULT_QUARANTINE = Path('/var/lib/cyberpanel-php-security-updater/quarantine')
@@ -1352,7 +1351,6 @@ def run_security_scan(days=7, deep=False, interactive=False, json_output=False, 
         interactive_review(report)
     return report
 )
-PERSISTENCE_TOKENS = re.compile(r'(?i)(curl|wget|bash\s+-c|python\s+-c|perl\s+-e|php\s+-r|nc\s|ncat|socat|/dev/tcp/)')
 
 MAX_FILE_BYTES = 8 * 1024 * 1024
 DEFAULT_QUARANTINE = Path('/var/lib/cyberpanel-php-security-updater/quarantine')
