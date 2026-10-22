@@ -132,9 +132,6 @@ def iter_recent_files(roots, cutoff, deep=False):
                     continue
                 if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
                     continue
-                suffix = path.suffix.lower()
-                if suffix not in TEXT_EXTENSIONS and name != '.htaccess':
-                    continue
                 if not deep and st.st_mtime < cutoff:
                     continue
                 key = (st.st_dev, st.st_ino)
@@ -209,7 +206,13 @@ def scan(days=7, deep=False, roots=None):
         inspected += 1
         if st.st_size > MAX_FILE_BYTES:
             continue
+        suffix = path.suffix.lower()
         try:
+            if suffix not in TEXT_EXTENSIONS and path.name != '.htaccess':
+                with path.open('rb') as probe:
+                    head = probe.read(min(st.st_size, 128 * 1024))
+                if b'<?php' not in head.lower() and b'<?= ' not in head.lower() and b'<?=' not in head.lower():
+                    continue
             text, truncated = read_text_limited(path)
         except OSError:
             continue
