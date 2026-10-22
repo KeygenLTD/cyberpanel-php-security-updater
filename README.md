@@ -7,7 +7,7 @@ Conservative, fail-closed LSPHP package updates for **AlmaLinux 8, 9 and 10 + Cy
 Use one command from any directory. It installs or updates the tool under `/opt`, refreshes the global command, then starts the secure workflow:
 
 ```bash
-sudo bash -c 'set -e; d=/opt/cyberpanel-php-security-updater; if [ -d "$d/.git" ]; then git -C "$d" pull --ff-only origin main; else git clone https://github.com/KeygenLTD/cyberpanel-php-security-updater.git "$d"; fi; ln -sf "$d/bin/php-security-update" /usr/local/bin/php-security-update; exec /usr/local/bin/php-security-update --secure-update'
+sudo bash -c 'set -e; d=/opt/cyberpanel-php-security-updater; if [ -d "$d/.git" ]; then git -C "$d" pull --ff-only origin main; else git clone https://github.com/KeygenLTD/cyberpanel-php-security-updater.git "$d"; fi; chmod 0755 "$d/bin/php-security-update"; ln -sf "$d/bin/php-security-update" /usr/local/bin/php-security-update; exec /usr/local/bin/php-security-update --secure-update'
 ```
 
 Run that same one-liner again on another server or later on the same server; it updates the local copy before starting the secure workflow.
