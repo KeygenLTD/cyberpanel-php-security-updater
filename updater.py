@@ -236,8 +236,25 @@ def manual_commands(installed, report):
     report['warnings'].append('Manual commands are NOT executed or policy-enforced by this tool. Validate backup, window and exact transaction; decline unrelated changes.')
 
 
+def daily_health(args, report, phase):
+    from daily import check_sites
+    results = report.setdefault('https_' + phase, [])
+    check_sites(args.health_urls, results)
+
+
+def refresh_daily_workers(args, report):
+    if getattr(args, 'daily', False):
+        marker = Path('/usr/local/lsws/admin/tmp/.lsphp_restart.txt')
+        marker.touch()
+        report['php_restart_marker'] = str(marker)
+
+
 def execute(args, report):
     preflight(args, report)
+    if getattr(args, 'daily', False):
+        daily_health(args, report, 'before')
+        if any(process['deleted'] for process in report['processes_before']):
+            raise RuntimeError('Stale PHP workers remain from a previous operation')
     if report['os_major'].startswith('ubuntu:'):
         from apt_backend import execute_apt
         return execute_apt(args, report)
@@ -288,13 +305,13 @@ def execute(args, report):
         compare = lambda a, b: rpm.labelCompare((str(a.epoch), a.version, a.release),
                                                 (str(b.epoch), b.version, b.release))
         report['preview'] = validate_transaction(installed, incoming, outgoing, compare)
-        if args.json:
+        if args.json and not getattr(args, 'daily', False):
             print(json.dumps({'transaction_preview': report['preview']}, indent=2), flush=True)
         if not args.apply:
             return
         if args.secure_update:
             report['backup'] = {'operator_attested': True}
-        else:
+        elif incoming or not getattr(args, 'daily', False):
             report['backup'] = backup_check(args.backup, args.backup_sha256)
             window(args.window_start, args.window_end)
         if incoming:
@@ -319,6 +336,7 @@ def execute(args, report):
                 restart_marker.parent.mkdir(parents=True, exist_ok=True)
                 restart_marker.touch()
                 report['php_restart_marker'] = str(restart_marker)
+            refresh_daily_workers(args, report)
         report['php_after'] = versions(installed, report.setdefault('warnings', []))
     postflight(args, report)
 
@@ -326,6 +344,8 @@ def execute(args, report):
 def postflight(args, report):
     if args.terminate_stale:
         terminate_stale(args)
+    if getattr(args, 'daily', False) and report.get('transaction_completed'):
+        daily_health(args, report, 'after')
     report['processes_after'] = processes()
     from site_audit import audit_sites
     report['sites_after'] = audit_sites(report['php_after'], report['processes_after'])
@@ -346,6 +366,8 @@ def parser():
     mode = p.add_mutually_exclusive_group()
     mode.add_argument('--check', action='store_true', help='default: cached, read-only preview')
     mode.add_argument('--apply', action='store_true')
+    mode.add_argument('--daily', action='store_true',
+                      help='check configured HTTPS sites and apply eligible LSPHP upgrades')
     mode.add_argument('--secure-update', action='store_true', help='scan, preview affected sites and update all installed LSPHP branches')
     p.add_argument('--manual', action='store_true', help='check and print manual commands; execute nothing')
     p.add_argument('--approve', choices=['APPLY-LSPHP-UPDATES'])
@@ -558,6 +580,10 @@ def secure_update_flow(args):
 def main(argv=None):
     p = parser()
     args = p.parse_args(argv)
+    if args.daily and (args.security_scan or args.manual or args.terminate_stale
+                       or args.approve or args.backup or args.backup_sha256
+                       or args.restore_tested or args.window_start or args.window_end):
+        p.error('--daily uses its own configuration and cannot be combined with scan or apply options')
     if args.secure_update:
         return secure_update_flow(args)
     if args.security_scan:
@@ -589,16 +615,26 @@ def main(argv=None):
         p.error('--term-timeout must be 1..3600')
     if args.report_prefix and any(os.path.lexists(args.report_prefix + suffix) for suffix in ('.json', '.txt')):
         p.error('Report files already exist; choose a fresh prefix')
-    report = dict(schema=1, mode='apply' if args.apply else 'check', status='failed',
+    mode = 'daily' if args.daily else 'apply' if args.apply else 'check'
+    report = dict(schema=1, mode=mode, status='failed',
                   time=dt.datetime.now(dt.timezone.utc).isoformat())
     lock = None
     scratch = None
     try:
         scratch = tempfile.TemporaryDirectory(prefix='lsphp-check-')
         args.scratch = scratch.name
+        if args.daily:
+            from daily import load_config, maintenance_window
+            config = load_config()
+            args.health_urls = config['https_urls']
+            args.backup = config['backup']
+            args.backup_sha256 = config['backup_sha256']
+            args.window_start, args.window_end = maintenance_window(dt.datetime.now(dt.timezone.utc))
+            args.apply = True
         if args.apply:
-            window(args.window_start, args.window_end)
-            backup_check(args.backup, args.backup_sha256)
+            if not args.daily:
+                window(args.window_start, args.window_end)
+                backup_check(args.backup, args.backup_sha256)
             import fcntl
             lock = open('/run/lock/cyberpanel-php-security-updater.lock', 'a')
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -606,6 +642,11 @@ def main(argv=None):
         report['status'] = 'ok'
     except (Exception, KeyboardInterrupt) as exc:
         report['error'] = str(exc)
+        if args.daily and report.get('transaction_started') and 'https_after' not in report:
+            try:
+                daily_health(args, report, 'after')
+            except (Exception, KeyboardInterrupt) as health_error:
+                report['https_after_error'] = str(health_error)
     finally:
         if lock:
             lock.close()

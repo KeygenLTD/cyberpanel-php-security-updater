@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily CyberPanel LSPHP package and HTTPS health checks
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/php-security-update --daily --json
+TimeoutStartSec=infinity
+UMask=0077

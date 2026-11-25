@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="220" viewBox="0 0 960 220" role="img" aria-labelledby="title description">
+  <title id="title">Daily PHP maintenance</title>
+  <desc id="description">Check site health, apply eligible LiteSpeed PHP package upgrades, then verify the sites and PHP workers.</desc>
+  <rect x="1" y="1" width="958" height="218" rx="22" fill="#111d29" stroke="#2c4357" stroke-width="2"/>
+  <path d="M28 111H932" fill="none" stroke="#314657" stroke-width="2"/>
+  <path d="m333 104 8 7-8 7m287-14 8 7-8 7" fill="none" stroke="#72aaff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <g fill="#172838" stroke="#39556c">
+    <rect x="50" y="43" width="256" height="134" rx="14"/>
+    <rect x="352" y="43" width="256" height="134" rx="14" stroke="#548fde"/>
+    <rect x="654" y="43" width="256" height="134" rx="14"/>
+  </g>
+  <g fill="none" stroke="#a8cbff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M72 91h8l5-12 6 18 5-6h10"/>
+    <path d="M375 90v11h23V90m-11-15v20m-7-7 7 7 7-7"/>
+    <path d="M676 88a11 11 0 1 0 22 0 11 11 0 1 0-22 0m6 0 4 4 7-8"/>
+  </g>
+  <g font-family="system-ui, Segoe UI, sans-serif">
+    <g fill="#f2f7ff" font-size="21" font-weight="650">
+      <text x="74" y="133">Check sites</text>
+      <text x="376" y="133">Update LSPHP</text>
+      <text x="678" y="133">Verify again</text>
+    </g>
+    <g fill="#bdd0e0" font-size="15">
+      <text x="74" y="156">HTTPS health checks</text>
+      <text x="376" y="156">Same PHP branch</text>
+      <text x="678" y="156">HTTPS and PHP workers</text>
+    </g>
+  </g>
+</svg>

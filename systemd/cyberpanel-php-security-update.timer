@@ -1,0 +1,9 @@
+[Unit]
+Description=Run CyberPanel PHP maintenance once per day at 03:00 UTC
+
+[Timer]
+OnCalendar=*-*-* 03:00:00 UTC
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
