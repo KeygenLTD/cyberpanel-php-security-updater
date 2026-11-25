@@ -71,11 +71,13 @@ def execute_apt(args, report):
             if args.manual:
                 u.manual_commands(installed, report)
             report['preview'] = preview
-            print(json.dumps({'transaction_preview': preview}, indent=2), flush=True)
+            if not getattr(args, 'daily', False):
+                print(json.dumps({'transaction_preview': preview}, indent=2), flush=True)
             if not args.apply:
                 return
-            report['backup'] = u.backup_check(args.backup, args.backup_sha256)
-            u.window(args.window_start, args.window_end)
+            if incoming or not getattr(args, 'daily', False):
+                report['backup'] = u.backup_check(args.backup, args.backup_sha256)
+                u.window(args.window_start, args.window_end)
             if incoming:
                 # Fetch and authenticate first, then recheck the window before dpkg.
                 cache.fetch_archives(allow_unauthenticated=False)
@@ -90,6 +92,7 @@ def execute_apt(args, report):
                                     package.name + ':' + package.arch])
                     if actual != package.version:
                         raise RuntimeError('Post-transaction DPKG version verification failed')
+                u.refresh_daily_workers(args, report)
             report['php_after'] = u.versions(installed)
         finally:
             cache.close()
