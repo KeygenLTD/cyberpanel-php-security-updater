@@ -74,6 +74,8 @@ sudo php-security-update --security-scan --days 30 --interactive
 
 The scan looks for web-shell and compromise indicators in site files. Interactive review lets you inspect findings and choose whether to quarantine a file. Daily PHP maintenance does not run the scan.
 
+Repeated scans reuse results for unchanged files, including previous findings. New or changed files are analyzed again. The cache is private to root in `/var/lib/cyberpanel-php-security-updater/scan-cache` and invalidates automatically when the scanner changes. Use `--security-scan --deep` to reanalyze all supported web files regardless of age or cache. Persistence locations keep their configured time window.
+
 ## One-off updates
 
 Run `sudo php-security-update --secure-update` to scan files, review findings, preview the PHP package changes, and approve installation. Prepare a restorable backup before approving. Verify the affected sites through their real HTTPS routes after the update.

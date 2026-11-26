@@ -13,6 +13,8 @@ import re
 import shutil
 import stat
 
+from scan_cache import MISS, fingerprint, scan_cache
+
 TEXT_EXTENSIONS = {'.php', '.phtml', '.php5', '.php7', '.php8', '.phar', '.inc', '.htaccess', '.js'}
 PHP_EXTENSIONS = {'.php', '.phtml', '.php5', '.php7', '.php8', '.phar', '.inc'}
 KNOWN_SHELL_NAMES = re.compile(
@@ -163,7 +165,7 @@ def iter_recent_files(roots, cutoff, deep=False):
                 yield path, st
 
 
-def suspicious_persistence(cutoff):
+def suspicious_persistence(cutoff, cache=None):
     candidates = []
     paths = [Path('/etc/crontab'), Path('/etc/cron.d'), Path('/var/spool/cron'), Path('/etc/systemd/system'),
              Path('/tmp'), Path('/var/tmp'), Path('/dev/shm')]
@@ -176,16 +178,23 @@ def suspicious_persistence(cutoff):
                 st = path.lstat()
                 if not stat.S_ISREG(st.st_mode) or stat.S_ISLNK(st.st_mode) or st.st_mtime < cutoff or st.st_size > MAX_FILE_BYTES:
                     continue
-                text, _ = read_text_limited(path)
+                finding = cache.get('persistence', path, st) if cache else MISS
+                if finding is MISS:
+                    text, _ = read_text_limited(path)
+                    finding = None
+                    if PERSISTENCE_TOKENS.search(text):
+                        finding = {
+                            'path': str(path),
+                            'modified': dt.datetime.fromtimestamp(st.st_mtime, dt.timezone.utc).isoformat(),
+                            'owner': owner_name(st.st_uid),
+                            'reason': 'Recent persistence/temp file contains command/downloader/network execution indicators'
+                        }
+                    if cache:
+                        cache.put('persistence', path, st, finding)
             except (OSError, UnicodeError):
                 continue
-            if PERSISTENCE_TOKENS.search(text):
-                candidates.append({
-                    'path': str(path),
-                    'modified': dt.datetime.fromtimestamp(st.st_mtime, dt.timezone.utc).isoformat(),
-                    'owner': owner_name(st.st_uid),
-                    'reason': 'Recent persistence/temp file contains command/downloader/network execution indicators'
-                })
+            if finding:
+                candidates.append(finding)
     return candidates
 
 
@@ -216,9 +225,36 @@ def related_log_hits(finding, limit=20):
     return hits
 
 
-def scan(days=7, deep=False, roots=None, progress=None, since=None):
+def inspect_web_file(path, st):
+    if path.suffix.lower() not in TEXT_EXTENSIONS and path.name != '.htaccess':
+        with path.open('rb') as probe:
+            head = probe.read(min(st.st_size, 128 * 1024)).lower()
+        if b'<?php' not in head and b'<?=' not in head:
+            return None
+    text, truncated = read_text_limited(path)
+    score, severity, reasons = classify_file(path, text)
+    if not score:
+        return None
+    return {
+        'path': str(path),
+        'score': score,
+        'severity': severity,
+        'reasons': reasons,
+        'sha256': sha256_file(path),
+        'size': st.st_size,
+        'owner': owner_name(st.st_uid),
+        'uid': st.st_uid,
+        'mode': oct(stat.S_IMODE(st.st_mode)),
+        'modified': dt.datetime.fromtimestamp(st.st_mtime, dt.timezone.utc).isoformat(),
+        'truncated_analysis': truncated,
+    }
+
+
+def scan(days=7, deep=False, roots=None, progress=None, since=None, cache=None):
     if os.geteuid() != 0:
         raise RuntimeError('Root required for complete security scan')
+    if deep:
+        cache = None
     roots = [Path(p) for p in (roots or discover_web_roots())]
     now = dt.datetime.now(dt.timezone.utc)
     if since:
@@ -246,32 +282,19 @@ def scan(days=7, deep=False, roots=None, progress=None, since=None):
                          findings=len(findings))
             if st.st_size > MAX_FILE_BYTES:
                 continue
-            suffix = path.suffix.lower()
             try:
-                if suffix not in TEXT_EXTENSIONS and path.name != '.htaccess':
-                    with path.open('rb') as probe:
-                        head = probe.read(min(st.st_size, 128 * 1024))
-                    if b'<?php' not in head.lower() and b'<?= ' not in head.lower() and b'<?=' not in head.lower():
+                finding = cache.get('web', path, st) if cache else MISS
+                if finding is MISS:
+                    finding = inspect_web_file(path, st)
+                    if fingerprint(path.lstat()) != fingerprint(st):
                         continue
-                text, truncated = read_text_limited(path)
+                    if cache:
+                        cache.put('web', path, st, finding)
             except OSError:
                 continue
-            score, severity, reasons = classify_file(path, text)
-            if not score:
+            if not finding:
                 continue
-            findings.append({
-                'path': str(path),
-                'score': score,
-                'severity': severity,
-                'reasons': reasons,
-                'sha256': sha256_file(path),
-                'size': st.st_size,
-                'owner': owner_name(st.st_uid),
-                'uid': st.st_uid,
-                'mode': oct(stat.S_IMODE(st.st_mode)),
-                'modified': dt.datetime.fromtimestamp(st.st_mtime, dt.timezone.utc).isoformat(),
-                'truncated_analysis': truncated,
-            })
+            findings.append(finding)
             if progress:
                 progress('finding', root=str(root), index=root_index, total=total_roots,
                          inspected=inspected, root_inspected=root_inspected,
@@ -283,7 +306,7 @@ def scan(days=7, deep=False, roots=None, progress=None, since=None):
     findings.sort(key=lambda x: (-x['score'], x['path']))
     if progress:
         progress('persistence_start', inspected=inspected, findings=len(findings))
-    persistence = suspicious_persistence(cutoff)
+    persistence = suspicious_persistence(cutoff, cache) if cache else suspicious_persistence(cutoff)
     if progress:
         progress('persistence_done', inspected=inspected, findings=len(findings),
                  persistence=len(persistence))
@@ -300,6 +323,7 @@ def scan(days=7, deep=False, roots=None, progress=None, since=None):
         'deep': deep,
         'roots': [str(p) for p in roots],
         'files_inspected': inspected,
+        'cached_classifications': cache.hits if cache else 0,
         'findings': findings,
         'persistence_findings': persistence,
         'evidence_of_compromise': compromise,
@@ -364,6 +388,7 @@ def human_summary(report):
     lines = ['CyberPanel Security Scan', '']
     lines.append('Web roots: {}'.format(len(report['roots'])))
     lines.append('Files inspected: {}'.format(report['files_inspected']))
+    lines.append('Cached classifications reused: {}'.format(report.get('cached_classifications', 0)))
     lines.append('Suspicious files: {}'.format(len(report['findings'])))
     lines.append('Persistence indicators: {}'.format(len(report['persistence_findings'])))
     lines.append('Evidence of compromise: {}'.format(report['evidence_of_compromise']))
@@ -445,7 +470,12 @@ def run_security_scan(days=7, deep=False, interactive=False, json_output=False, 
         print('Live progress enabled.\n')
     if not json_output and since:
         print('Scan window: {} -> now'.format(since))
-    report = scan(days=days, deep=deep, progress=progress, since=since)
+    if deep or os.geteuid() != 0:
+        report = scan(days=days, deep=deep, progress=progress, since=since)
+    else:
+        rules = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+        with scan_cache(rules) as cache:
+            report = scan(days=days, deep=deep, progress=progress, since=since, cache=cache)
     if json_output:
         print(json.dumps(report, indent=2, sort_keys=True))
     else:
