@@ -29,6 +29,10 @@ def load_config(path=CONFIG):
             raise RuntimeError('Health URLs must use HTTPS without credentials or fragments')
     backup = config.get('backup')
     digest = config.get('backup_sha256')
+    if config.get('operator_snapshot_confirmed') is True:
+        if any(key in config for key in ('backup', 'backup_sha256', 'restore_tested')):
+            raise RuntimeError('Choose either a backup file or an operator-confirmed snapshot')
+        return config
     if (not isinstance(backup, str) or not Path(backup).is_absolute()
             or not isinstance(digest, str) or not re.fullmatch(r'[0-9a-fA-F]{64}', digest)
             or config.get('restore_tested') is not True):

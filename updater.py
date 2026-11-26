@@ -242,6 +242,12 @@ def daily_health(args, report, phase):
     check_sites(args.health_urls, results)
 
 
+def apply_backup(args):
+    if getattr(args, 'daily', False) and getattr(args, 'operator_snapshot_confirmed', False):
+        return {'method': 'operator-confirmed-snapshot', 'verified_by_updater': False}
+    return backup_check(args.backup, args.backup_sha256)
+
+
 def refresh_daily_workers(args, report):
     if getattr(args, 'daily', False):
         marker = Path('/usr/local/lsws/admin/tmp/.lsphp_restart.txt')
@@ -312,7 +318,7 @@ def execute(args, report):
         if args.secure_update:
             report['backup'] = {'operator_attested': True}
         elif incoming or not getattr(args, 'daily', False):
-            report['backup'] = backup_check(args.backup, args.backup_sha256)
+            report['backup'] = apply_backup(args)
             window(args.window_start, args.window_end)
         if incoming:
             base.download_packages(incoming)
@@ -627,8 +633,9 @@ def main(argv=None):
             from daily import load_config, maintenance_window
             config = load_config()
             args.health_urls = config['https_urls']
-            args.backup = config['backup']
-            args.backup_sha256 = config['backup_sha256']
+            args.operator_snapshot_confirmed = config.get('operator_snapshot_confirmed') is True
+            args.backup = config.get('backup')
+            args.backup_sha256 = config.get('backup_sha256')
             args.window_start, args.window_end = maintenance_window(dt.datetime.now(dt.timezone.utc))
             args.apply = True
         if args.apply:

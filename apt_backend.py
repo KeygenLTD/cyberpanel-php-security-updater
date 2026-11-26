@@ -76,7 +76,7 @@ def execute_apt(args, report):
             if not args.apply:
                 return
             if incoming or not getattr(args, 'daily', False):
-                report['backup'] = u.backup_check(args.backup, args.backup_sha256)
+                report['backup'] = u.apply_backup(args)
                 u.window(args.window_start, args.window_end)
             if incoming:
                 # Fetch and authenticate first, then recheck the window before dpkg.
