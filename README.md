@@ -33,7 +33,7 @@ If the tool is already installed, use `sudo git -C /opt/cyberpanel-php-security-
 **Turn on per server.** The timer runs daily at **03:00 UTC (06:00 in Türkiye)**. Package changes can start between 03:00 and 04:00 UTC.
 
 1. Check each configured HTTPS endpoint. A failed check blocks package changes.
-2. Resolve a signed transaction for installed LSPHP packages and verify the backup. A missing dependency, package removal or downgrade blocks the update.
+2. Resolve a signed transaction for installed LSPHP packages and check the configured recovery option. A missing dependency, package removal or downgrade blocks the update.
 3. After a package change, request a PHP worker refresh and check HTTPS, OpenLiteSpeed and PHP workers again. Results appear in the system journal.
 
 ### 1. Configure sites and the backup
@@ -50,6 +50,8 @@ Create `/etc/cyberpanel-php-security-updater/daily.json`, owned by root with mod
 ```
 
 List a final HTTPS URL returning 2xx for each affected site. An uncached page that exercises PHP is a good target. The updater verifies TLS and does not follow redirects. Keep the backup path and digest current. Set `restore_tested` after testing a restore of the server, including sites, databases, web configuration and package state.
+
+If you manage snapshots in a provider panel, you can replace the three backup-file fields with `"operator_snapshot_confirmed": true`. The journal records the snapshot as confirmed by the operator. The updater does not contact the provider or check the expiry date. Keep your snapshot current while the timer is enabled.
 
 ### 2. Enable and check the timer
 

@@ -11,6 +11,21 @@ import updater
 
 
 class DailyMaintenanceTests(unittest.TestCase):
+    def test_operator_snapshot_is_explicit_and_reported_as_unverified(self):
+        import json
+
+        path = MagicMock()
+        path.is_symlink.return_value = False
+        path.stat.return_value = SimpleNamespace(st_uid=0, st_mode=0o600)
+        config = {'https_urls': ['https://example.com/'], 'operator_snapshot_confirmed': True}
+        path.read_text.return_value = json.dumps(config)
+        self.assertEqual(daily.load_config(path), config)
+        self.assertEqual(updater.apply_backup(SimpleNamespace(daily=True, **config)),
+                         {'method': 'operator-confirmed-snapshot', 'verified_by_updater': False})
+        path.read_text.return_value = json.dumps(dict(config, restore_tested=True))
+        with self.assertRaisesRegex(RuntimeError, 'Choose either'):
+            daily.load_config(path)
+
     def test_window_matches_utc_calendar(self):
         now = dt.datetime(2026, 11, 26, 3, 5, tzinfo=dt.timezone.utc)
         self.assertEqual(daily.maintenance_window(now),
